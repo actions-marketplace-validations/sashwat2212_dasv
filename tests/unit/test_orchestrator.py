@@ -240,3 +240,42 @@ async def test_orchestrator_unhealthy_provider_exits_runtime_error_and_records_s
         f.rule_id == "RULE-HERM-005" and f.severity == Severity.HIGH for f in res.report.findings
     )
     assert (out_dir / "report.json").is_file()
+
+
+async def test_orchestrator_tier1_with_mutations_populates_survival_rate(
+    hardened_harbor_env: Path,
+    tmp_path: Path,
+) -> None:
+    (hardened_harbor_env / "src").mkdir(exist_ok=True)
+    (hardened_harbor_env / "src" / "calculator.py").write_text(
+        "def add(a: int, b: int) -> int:\n"
+        "    if a < 0:\n"
+        "        raise ValueError('neg')\n"
+        "    return a + b\n",
+        encoding="utf-8",
+    )
+    (hardened_harbor_env / "tests" / "test_calc.py").write_text(
+        "def test_add() -> None:\n    assert 2 + 3 == 5\n",
+        encoding="utf-8",
+    )
+    adapter = HarborAdapter()
+    spec = adapter.load(hardened_harbor_env)
+    provider = _make_clean_tier1_provider(oracle_passes=True)
+
+    # Anti-patches fail clean-image grading when test.sh returns reward=0.0 on broken patches
+    html_path = tmp_path / "mut_report.html"
+    ctx = AuditContext.create(
+        config=DasvConfig(),
+        adapter=adapter,
+        env_spec=spec,
+        out_dir=tmp_path / "run_mut",
+        provider=provider,
+        native=False,
+        oracle_replays=2,
+        noop_replays=1,
+        run_mutations=True,
+    )
+    res = await TieredAuditOrchestrator().execute(ctx, {0, 1}, html_path=html_path)
+    assert res.report.mutation_survival_rate is not None
+    assert "Mutation Survival" in html_path.read_text(encoding="utf-8")
+    assert provider.active_handles == {}

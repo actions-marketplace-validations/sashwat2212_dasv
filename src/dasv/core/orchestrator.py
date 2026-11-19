@@ -35,6 +35,7 @@ from dasv.core.schemas import (
     SignalProfile,
     meets_fail_threshold,
 )
+from dasv.mutate.runner import MutationSuiteRunner
 from dasv.profile.stats import compute_grade, compute_hackability_score
 from dasv.reporting.html_renderer import write_html_report
 from dasv.reporting.json_writer import write_manifest_json, write_report_json
@@ -83,6 +84,7 @@ class AuditContext:
     oracle_replays: int | None = None
     noop_replays: int | None = None
     short_circuit: bool = True
+    run_mutations: bool = False
 
     @classmethod
     def create(
@@ -100,6 +102,7 @@ class AuditContext:
         oracle_replays: int | None = None,
         noop_replays: int | None = None,
         short_circuit: bool = True,
+        run_mutations: bool = False,
         run_id: str | None = None,
     ) -> AuditContext:
         """Build a ready-to-run AuditContext wired with BudgetGuard, Janitor, and Semaphore."""
@@ -127,6 +130,7 @@ class AuditContext:
             oracle_replays=oracle_replays,
             noop_replays=noop_replays,
             short_circuit=short_circuit,
+            run_mutations=run_mutations,
         )
 
 
@@ -212,7 +216,7 @@ class TieredAuditOrchestrator:
         self,
         ctx: AuditContext,
         oci_digests: dict[str, str],
-    ) -> tuple[list[AuditFinding], DeterminismMetrics, bool, str | None]:
+    ) -> tuple[list[AuditFinding], DeterminismMetrics, bool, str | None, float | None]:
         provider: SandboxProvider = ctx.provider or DockerSandboxProvider(janitor=ctx.janitor)
         health = await provider.health_check()
         if not health.healthy:
@@ -275,7 +279,25 @@ class TieredAuditOrchestrator:
             semaphore=ctx.semaphore,
         )
         findings.extend(det_result.findings)
-        return findings, det_result.metrics, det_result.passed, health.server_arch
+
+        # 3. Optional $0 deterministic Anti-Patch & ImpossibleBench mutation suite.
+        mut_survival: float | None = None
+        if ctx.run_mutations:
+            mut_runner = MutationSuiteRunner(
+                provider=provider,
+                sandbox_config=ctx.config.sandbox,
+            )
+            mut_report = await mut_runner.run(
+                effective_spec,
+                adapter=ctx.adapter,
+                run_id=f"{ctx.run_id}-mut",
+                include_impossible_bench=True,
+                dry_run=False,
+            )
+            mut_survival = mut_report.mutation_survival_rate
+            findings.extend(mut_report.findings)
+
+        return findings, det_result.metrics, det_result.passed, health.server_arch, mut_survival
 
     async def execute(
         self,
@@ -330,12 +352,18 @@ class TieredAuditOrchestrator:
             if 0 in tiers:
                 findings.extend(await self._run_tier0(ctx))
 
-            # Tier 1: $0 runtime boundary probes + N-trial Clean-Image Determinism.
+            # Tier 1: $0 runtime boundary probes + N-trial Clean-Image Determinism (+ mutations).
             if 1 in tiers:
-                t1_findings, determinism, det_passed, docker_arch = await self._run_tier1(
-                    ctx, oci_digests
-                )
+                (
+                    t1_findings,
+                    determinism,
+                    det_passed,
+                    docker_arch,
+                    t1_mut_survival,
+                ) = await self._run_tier1(ctx, oci_digests)
                 findings.extend(t1_findings)
+                if t1_mut_survival is not None:
+                    mutation_survival_rate = t1_mut_survival
                 if ctx.short_circuit and not det_passed and ({2, 3} & tiers):
                     short_circuited = True
                     findings.append(

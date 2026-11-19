@@ -161,6 +161,7 @@ def test_cli_audit_honors_config_default_tiers_and_runtime_error_when_docker_abs
         ["audit", str(hardened_harbor_env), "--tiers", "0,1", "--replays", "2", "--no-native"],
     )
     assert res_no_docker.exit_code == EXIT_RUNTIME_ERROR
+    assert "Grade A" not in res_no_docker.stdout
 
 
 def test_cli_mutate_dry_run_and_remaining_stage6_stubs(

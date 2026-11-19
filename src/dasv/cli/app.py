@@ -20,6 +20,7 @@ from dasv.core.config import load_config
 from dasv.core.errors import (
     EXIT_AUDIT_FAIL,
     EXIT_CONFIG_ERROR,
+    EXIT_NATIVE_ERROR,
     EXIT_PASS,
     EXIT_RUNTIME_ERROR,
     DasvError,
@@ -262,6 +263,13 @@ def audit(
             help="Skip Tier 2/3 spend when Tier 1 determinism fails.",
         ),
     ] = True,
+    with_mutations: Annotated[
+        bool,
+        typer.Option(
+            "--with-mutations/--no-mutations",
+            help="Run $0 Anti-Patch & ImpossibleBench mutation suite inside Tier 1.",
+        ),
+    ] = False,
     max_cost_usd: Annotated[
         float | None,
         typer.Option("--max-cost-usd", min=0.0, help="Hard USD budget ceiling."),
@@ -311,6 +319,7 @@ def audit(
         oracle_replays=replays,
         noop_replays=noop_replays,
         short_circuit=short_circuit,
+        run_mutations=with_mutations,
     )
     orchestrator = TieredAuditOrchestrator()
     result = asyncio.run(
@@ -327,13 +336,23 @@ def audit(
     if result.error_message:
         typer.echo(f"Error: {result.error_message}", err=True)
 
+    # Do not render a misleading Grade badge when runtime/native setup aborted the audit.
+    if result.exit_code in {EXIT_RUNTIME_ERROR, EXIT_NATIVE_ERROR} or result.aborted_by_signal:
+        raise typer.Exit(code=result.exit_code)
+
     rep = result.report
     hack_score = 0.0 if rep.hackability_score is None else rep.hackability_score
-    summary = Table(title=f"Audit Summary: {spec.task_id} (Grade {rep.grade})")
+    title = (
+        f"Audit Summary (Partial — Budget Cap Reached): {spec.task_id} "
+        f"(Provisional Grade {rep.grade})"
+        if result.budget_exceeded
+        else f"Audit Summary: {spec.task_id} (Grade {rep.grade})"
+    )
+    summary = Table(title=title)
     summary.add_column("Metric", style="bold")
     summary.add_column("Value")
     summary.add_row("Standard", spec.standard.value)
-    summary.add_row("Grade", rep.grade)
+    summary.add_row("Grade", f"{rep.grade} (provisional)" if result.budget_exceeded else rep.grade)
     summary.add_row("Hackability Score", f"{hack_score:.2f} / 100.0")
     summary.add_row("Total Findings", str(len(rep.findings)))
     summary.add_row("Fail Threshold", threshold.value)
@@ -349,6 +368,8 @@ def audit(
         summary.add_row(
             "Latency p50 / p95", f"{det.latency_p50_ms:.0f} / {det.latency_p95_ms:.0f} ms"
         )
+    if rep.mutation_survival_rate is not None:
+        summary.add_row("Mutation Survival Rate", f"{rep.mutation_survival_rate * 100.0:.1f}%")
     console.print(summary)
 
     if rep.findings:
