@@ -18,8 +18,10 @@ from dasv import __version__
 from dasv.adapters.registry import AdapterRegistry
 from dasv.core.config import load_config
 from dasv.core.errors import (
+    EXIT_AUDIT_FAIL,
     EXIT_CONFIG_ERROR,
     EXIT_PASS,
+    EXIT_RUNTIME_ERROR,
     DasvError,
 )
 from dasv.core.orchestrator import AuditContext, TieredAuditOrchestrator
@@ -27,9 +29,12 @@ from dasv.core.schemas import (
     AuditReport,
     Severity,
 )
+from dasv.mutate import MutationSuiteRunner
 from dasv.reporting.html_renderer import write_html_report
 from dasv.reporting.json_writer import write_report_json
 from dasv.reporting.sarif_writer import write_sarif
+from dasv.sandbox.docker_provider import DockerSandboxProvider
+from dasv.sandbox.janitor import ContainerJanitor
 
 app = typer.Typer(
     name="dasv",
@@ -410,7 +415,7 @@ def report(
 def _stage6_stub(command_name: str, milestone: str) -> None:
     typer.echo(
         f"`dasv {command_name}` is scheduled for Stage 6 ({milestone}). "
-        "Available in Stage 5: `doctor`, `inspect`, `audit --tiers 0`, `report`.",
+        "Available now: `doctor`, `inspect`, `audit`, `mutate`, `report`.",
         err=True,
     )
     raise typer.Exit(code=EXIT_CONFIG_ERROR)
@@ -419,16 +424,101 @@ def _stage6_stub(command_name: str, milestone: str) -> None:
 @app.command()
 def mutate(
     path: Annotated[Path, typer.Argument(help="Path to RL environment directory.")],
+    env_format: Annotated[
+        str | None,
+        typer.Option("--format", help="Force adapter format (harbor, openenv, verifiers_v1, hud)."),
+    ] = None,
     impossible_bench: Annotated[
         bool,
         typer.Option(
-            "--impossible-bench/--no-impossible-bench", help="Run spec-contradiction mutations."
+            "--impossible-bench/--no-impossible-bench",
+            help="Include ImpossibleBench One-Off and Conflicting spec-contradiction mutations.",
         ),
     ] = True,
+    max_one_off: Annotated[
+        int,
+        typer.Option("--max-one-off", min=1, help="Max One-Off verifier assertion inversions."),
+    ] = 5,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Synthesize & syntax-check all mutations at $0 without booting Docker containers.",
+        ),
+    ] = False,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option("--out-dir", help="Write mutations.json and generated diffs/variants here."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to dasv.toml."),
+    ] = None,
 ) -> None:
-    """Run Tier 1 deterministic anti-patch & ImpossibleBench mutations ($0, Stage 6 M2)."""
-    _ = (path, impossible_bench)
-    _stage6_stub("mutate", "M2")
+    """Run Tier 1 deterministic anti-patch & ImpossibleBench mutations ($0)."""
+    try:
+        cfg = load_config(config_path)
+        registry = AdapterRegistry()
+        adapter = registry.resolve(path, forced_format=env_format)
+        spec = adapter.load(path)
+    except DasvError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    async def _run_mutations() -> int:
+        janitor = ContainerJanitor()
+        run_id = "dasv-mutate"
+        provider: DockerSandboxProvider | None = None
+        if not dry_run:
+            provider = DockerSandboxProvider(janitor=janitor)
+            health = await provider.health_check()
+            if not health.healthy:
+                typer.echo(
+                    f"Error: Docker runtime unavailable ({health.detail}). "
+                    "Start Docker/OrbStack or pass `--dry-run` to synthesize mutations locally.",
+                    err=True,
+                )
+                return EXIT_RUNTIME_ERROR
+        try:
+            runner_obj = MutationSuiteRunner(
+                provider=provider,
+                sandbox_config=cfg.sandbox,
+            )
+            mut_report = await runner_obj.run(
+                spec,
+                adapter=adapter,
+                run_id=run_id,
+                include_impossible_bench=impossible_bench,
+                max_one_off=max_one_off,
+                dry_run=dry_run,
+                out_dir=out_dir,
+            )
+        except DasvError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            return exc.exit_code
+        finally:
+            if not dry_run:
+                await janitor.reap_all(run_id)
+
+        table = Table(title=f"Mutation Suite: {spec.task_id}")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value")
+        table.add_row("Mode", "dry-run (synthesis only)" if dry_run else "clean-image grading")
+        table.add_row("Anti-Patches Generated", str(mut_report.anti_patches_generated))
+        if mut_report.mutation_survival_rate is not None:
+            table.add_row(
+                "Mutation Survival Rate", f"{mut_report.mutation_survival_rate * 100.0:.1f}%"
+            )
+        table.add_row("One-Off Verifier Mutations", str(mut_report.one_off_mutations_generated))
+        table.add_row("Dead Assertions (RULE-MUT-001)", str(mut_report.dead_assertions_count))
+        table.add_row("Conflicting Spec Variants", str(len(mut_report.conflicting_variants)))
+        table.add_row("Findings", str(len(mut_report.findings)))
+        console.print(table)
+        return EXIT_PASS if mut_report.passed else EXIT_AUDIT_FAIL
+
+    code = asyncio.run(_run_mutations())
+    if code != EXIT_PASS:
+        raise typer.Exit(code=code)
 
 
 @app.command()

@@ -163,8 +163,37 @@ def test_cli_audit_honors_config_default_tiers_and_runtime_error_when_docker_abs
     assert res_no_docker.exit_code == EXIT_RUNTIME_ERROR
 
 
-def test_cli_stage6_stubs_return_config_error(hardened_harbor_env: Path) -> None:
-    for cmd in ("mutate", "redteam", "rubric", "profile"):
+def test_cli_mutate_dry_run_and_remaining_stage6_stubs(
+    hardened_harbor_env: Path,
+    tmp_path: Path,
+) -> None:
+    # Populate a small Python source & test file inside the fixture so all mutators fire
+    (hardened_harbor_env / "src").mkdir(exist_ok=True)
+    (hardened_harbor_env / "src" / "calculator.py").write_text(
+        "def add(a: int, b: int) -> int:\n"
+        "    if a < 0:\n"
+        "        raise ValueError('neg')\n"
+        "    return a + b\n",
+        encoding="utf-8",
+    )
+    (hardened_harbor_env / "tests" / "test_calc.py").write_text(
+        "def test_add() -> None:\n    assert 2 + 3 == 5\n",
+        encoding="utf-8",
+    )
+
+    mut_out = tmp_path / "mut_artifacts"
+    mut_res = runner.invoke(
+        app,
+        ["mutate", str(hardened_harbor_env), "--dry-run", "--out-dir", str(mut_out)],
+    )
+    assert mut_res.exit_code == EXIT_PASS, mut_res.stdout + mut_res.stderr
+    assert (mut_out / "mutations.json").is_file()
+    mut_data = json.loads((mut_out / "mutations.json").read_text(encoding="utf-8"))
+    assert mut_data["anti_patches_generated"] == 5
+    assert mut_data["one_off_mutations_generated"] == 1
+    assert len(mut_data["conflicting_variants"]) == 1
+
+    for cmd in ("redteam", "rubric", "profile"):
         res = runner.invoke(app, [cmd, str(hardened_harbor_env)])
         assert res.exit_code == EXIT_CONFIG_ERROR
         assert "Stage 6" in res.stderr
