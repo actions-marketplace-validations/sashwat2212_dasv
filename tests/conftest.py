@@ -170,3 +170,20 @@ def make_fake_process(
             self.returncode = -9
 
     return _FakeProcess()
+
+
+from tests.unit.conftest import (  # noqa: E402
+    hardened_harbor_env as hardened_harbor_env,
+)
+from tests.unit.conftest import (  # noqa: E402
+    legacy_verifiers_v0 as legacy_verifiers_v0,
+)
+from tests.unit.conftest import (  # noqa: E402
+    minimal_openenv as minimal_openenv,
+)
+from tests.unit.conftest import (  # noqa: E402
+    minimal_verifiers_v1 as minimal_verifiers_v1,
+)
+from tests.unit.conftest import (  # noqa: E402
+    vulnerable_harbor_env as vulnerable_harbor_env,
+)

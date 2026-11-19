@@ -11,6 +11,7 @@ from dasv.adapters.base import AdapterCapabilities
 from dasv.adapters.native import NativeDelegateRunner
 from dasv.core.errors import ConfigError, RuntimeSandboxError
 from dasv.core.schemas import AuditFinding, EnvSpec, EnvStandard
+from dasv.verifier.clean_grader import coerce_grading_context, outcome_to_details
 
 _FROM_RE = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)", re.IGNORECASE)
 
@@ -139,11 +140,37 @@ class HarborAdapter:
         return result.findings
 
     async def run_oracle(self, spec: EnvSpec, sandbox: Any) -> tuple[float, dict[str, Any]]:
-        raise RuntimeSandboxError(
-            "Harbor Tier 1 container oracle execution is scheduled for Stage 6 M1."
+        if not spec.has_oracle or not spec.oracle_entrypoint:
+            raise RuntimeSandboxError(
+                f"Harbor task '{spec.task_id}' does not declare an existing oracle_entrypoint."
+            )
+        oracle_path = (spec.root_path / spec.oracle_entrypoint).resolve()
+        try:
+            oracle_path.relative_to(spec.root_path.resolve())
+        except ValueError as exc:
+            raise RuntimeSandboxError(
+                f"Oracle entrypoint '{spec.oracle_entrypoint}' escapes task root."
+            ) from exc
+        if not oracle_path.is_file():
+            raise RuntimeSandboxError(f"Oracle script not found: {oracle_path}")
+
+        ctx = coerce_grading_context(sandbox)
+        outcome, artifact = await ctx.grader.execute_and_grade(
+            spec,
+            ctx.run_id,
+            script_bytes=oracle_path.read_bytes(),
+            timeout_sec=ctx.timeout_sec,
+            workdir=ctx.workdir,
         )
+        return outcome.reward, outcome_to_details(outcome, artifact)
 
     async def run_noop(self, spec: EnvSpec, sandbox: Any) -> tuple[float, dict[str, Any]]:
-        raise RuntimeSandboxError(
-            "Harbor Tier 1 container no-op execution is scheduled for Stage 6 M1."
+        ctx = coerce_grading_context(sandbox)
+        outcome, artifact = await ctx.grader.execute_and_grade(
+            spec,
+            ctx.run_id,
+            agent_cmd=["true"],
+            timeout_sec=ctx.timeout_sec,
+            workdir=ctx.workdir,
         )
+        return outcome.reward, outcome_to_details(outcome, artifact)
