@@ -18,22 +18,18 @@ from dasv import __version__
 from dasv.adapters.registry import AdapterRegistry
 from dasv.core.config import load_config
 from dasv.core.errors import (
-    EXIT_AUDIT_FAIL,
     EXIT_CONFIG_ERROR,
     EXIT_PASS,
     DasvError,
 )
-from dasv.core.manifest import build_run_manifest
+from dasv.core.orchestrator import AuditContext, TieredAuditOrchestrator
 from dasv.core.schemas import (
-    AuditFinding,
     AuditReport,
     Severity,
-    meets_fail_threshold,
 )
-from dasv.profile.stats import compute_grade, compute_hackability_score
-from dasv.reporting.json_writer import write_manifest_json, write_report_json
+from dasv.reporting.html_renderer import write_html_report
+from dasv.reporting.json_writer import write_report_json
 from dasv.reporting.sarif_writer import write_sarif
-from dasv.sandbox.probes import run_tier0_static_probes
 
 app = typer.Typer(
     name="dasv",
@@ -206,12 +202,25 @@ def inspect(
 def audit(
     path: Annotated[Path, typer.Argument(help="Path to RL environment directory.")],
     tiers: Annotated[
-        str,
-        typer.Option("--tiers", help="Comma-separated audit tiers to run (e.g. '0' or '0,1')."),
-    ] = "0",
+        str | None,
+        typer.Option(
+            "--tiers",
+            help="Comma-separated audit tiers (e.g. '0' or '0,1'). Defaults to dasv.toml.",
+        ),
+    ] = None,
     env_format: Annotated[
         str | None,
         typer.Option("--format", help="Force adapter format (harbor, openenv, verifiers_v1, hud)."),
+    ] = None,
+    replays: Annotated[
+        int | None,
+        typer.Option("--replays", min=0, help="Tier 1 Oracle replay count N (overrides config)."),
+    ] = None,
+    noop_replays: Annotated[
+        int | None,
+        typer.Option(
+            "--noop-replays", min=0, help="Tier 1 No-op replay count M (overrides config)."
+        ),
     ] = None,
     out_dir: Annotated[
         Path | None,
@@ -220,6 +229,10 @@ def audit(
     sarif: Annotated[
         Path | None,
         typer.Option("--sarif", help="Write SARIF 2.1.0 report to this path."),
+    ] = None,
+    html: Annotated[
+        Path | None,
+        typer.Option("--html", help="Write zero-CDN offline HTML Certification Report."),
     ] = None,
     fail_on: Annotated[
         str | None,
@@ -237,16 +250,42 @@ def audit(
             "--require-native", help="Exit 5 if native validator binary is missing/fails."
         ),
     ] = False,
+    short_circuit: Annotated[
+        bool,
+        typer.Option(
+            "--short-circuit/--no-short-circuit",
+            help="Skip Tier 2/3 spend when Tier 1 determinism fails.",
+        ),
+    ] = True,
+    max_cost_usd: Annotated[
+        float | None,
+        typer.Option("--max-cost-usd", min=0.0, help="Hard USD budget ceiling."),
+    ] = None,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option("--max-tokens", min=1, help="Hard total token ceiling."),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Optional path to dasv.toml."),
     ] = None,
     seed: Annotated[int, typer.Option("--seed", help="Deterministic RNG seed.")] = 42,
 ) -> None:
-    """Run the tiered audit pipeline (Stage 5 supports Tier 0 static + native delegation)."""
+    """Run the tiered audit pipeline (Tier 0 static -> Tier 1 clean-image determinism)."""
     try:
         cfg = load_config(config_path)
-        parsed_tiers = _parse_tiers(tiers)
+        if max_cost_usd is not None or max_tokens is not None:
+            budget_updates: dict[str, object] = {}
+            if max_cost_usd is not None:
+                budget_updates["max_cost_usd"] = max_cost_usd
+            if max_tokens is not None:
+                budget_updates["max_tokens"] = max_tokens
+            cfg = cfg.model_copy(update={"budget": cfg.budget.model_copy(update=budget_updates)})
+        parsed_tiers: set[int] = (
+            _parse_tiers(tiers)
+            if tiers is not None
+            else {int(t) for t in cfg.project.default_tiers}
+        )
         threshold = _parse_severity(fail_on or cfg.project.fail_on)
         registry = AdapterRegistry()
         adapter = registry.resolve(path, forced_format=env_format)
@@ -255,81 +294,65 @@ def audit(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=exc.exit_code) from exc
 
-    findings: list[AuditFinding] = []
-    if 0 in parsed_tiers:
-        findings.extend(run_tier0_static_probes(spec))
-        findings.extend(adapter.static_findings(spec))
-        if native or require_native:
-            try:
-                native_findings = asyncio.run(
-                    adapter.run_native_check(spec, require_native=require_native)
-                )
-            except DasvError as exc:
-                typer.echo(f"Error: {exc}", err=True)
-                raise typer.Exit(code=exc.exit_code) from exc
-            findings.extend(native_findings)
-
-    deferred_tiers = sorted(t for t in parsed_tiers if t > 0)
-    if deferred_tiers:
-        findings.append(
-            AuditFinding(
-                rule_id="RULE-STAGE-001",
-                title="Requested higher tiers deferred to Stage 6",
-                severity=Severity.INFO,
-                tier=0,
-                source="dasv",
-                file_path=None,
-                line_number=None,
-                evidence=(
-                    f"Tier(s) {', '.join(str(t) for t in deferred_tiers)} require Stage 6 "
-                    "container/LLM runners; only Tier 0 static probes executed in Stage 5."
-                ),
-                remediation="Run with --tiers 0 in Stage 5 or upgrade to Stage 6 v0.1+.",
-            )
-        )
-
-    _, docker_arch, _ = _probe_docker_arch()
-    digests = {spec.image_ref: spec.image_digest} if (spec.image_ref and spec.image_digest) else {}
-    manifest = build_run_manifest(
-        spec.root_path,
-        cli_args=sys.argv[1:],
-        docker_server_arch=docker_arch,
-        oci_image_digests=digests,
-        rng_seed=seed,
-    )
-    hack_score = compute_hackability_score(findings)
-    grade = compute_grade(findings, hackability_score=hack_score)
-    report = AuditReport(
-        manifest=manifest,
+    ctx = AuditContext.create(
+        config=cfg,
+        adapter=adapter,
         env_spec=spec,
-        grade=grade,
-        hackability_score=hack_score,
-        findings=findings,
+        out_dir=out_dir,
+        cli_args=sys.argv[1:],
+        seed=seed,
+        native=native,
+        require_native=require_native,
+        oracle_replays=replays,
+        noop_replays=noop_replays,
+        short_circuit=short_circuit,
+    )
+    orchestrator = TieredAuditOrchestrator()
+    result = asyncio.run(
+        orchestrator.execute(
+            ctx,
+            parsed_tiers,
+            fail_on=threshold,
+            sarif_path=sarif,
+            html_path=html,
+            install_signal_handlers=True,
+        )
     )
 
-    if out_dir is not None:
-        write_report_json(report, out_dir / "report.json")
-        write_manifest_json(manifest, out_dir / "manifest.json")
-    if sarif is not None:
-        write_sarif(report, sarif)
+    if result.error_message:
+        typer.echo(f"Error: {result.error_message}", err=True)
 
-    summary = Table(title=f"Audit Summary: {spec.task_id} (Grade {grade})")
+    rep = result.report
+    hack_score = 0.0 if rep.hackability_score is None else rep.hackability_score
+    summary = Table(title=f"Audit Summary: {spec.task_id} (Grade {rep.grade})")
     summary.add_column("Metric", style="bold")
     summary.add_column("Value")
     summary.add_row("Standard", spec.standard.value)
-    summary.add_row("Grade", grade)
+    summary.add_row("Grade", rep.grade)
     summary.add_row("Hackability Score", f"{hack_score:.2f} / 100.0")
-    summary.add_row("Total Findings", str(len(findings)))
+    summary.add_row("Total Findings", str(len(rep.findings)))
     summary.add_row("Fail Threshold", threshold.value)
+    if rep.determinism is not None:
+        det = rep.determinism
+        summary.add_row(
+            "Oracle Pass Rate", f"{det.oracle_pass_rate * 100.0:.1f}% ({det.oracle_trials} trials)"
+        )
+        summary.add_row(
+            "No-op Pass Rate", f"{det.noop_pass_rate * 100.0:.1f}% ({det.noop_trials} trials)"
+        )
+        summary.add_row("Replay Variance", f"{det.replay_variance:.6f}")
+        summary.add_row(
+            "Latency p50 / p95", f"{det.latency_p50_ms:.0f} / {det.latency_p95_ms:.0f} ms"
+        )
     console.print(summary)
 
-    if findings:
+    if rep.findings:
         ftable = Table(title="Findings")
         ftable.add_column("Rule", style="bold")
         ftable.add_column("Severity")
         ftable.add_column("Location")
         ftable.add_column("Title")
-        for f in findings:
+        for f in rep.findings:
             loc = (
                 f"{f.file_path}:{f.line_number}"
                 if (f.file_path and f.line_number)
@@ -338,8 +361,8 @@ def audit(
             ftable.add_row(f.rule_id, f.severity.value.upper(), loc, f.title)
         console.print(ftable)
 
-    if meets_fail_threshold(findings, threshold):
-        raise typer.Exit(code=EXIT_AUDIT_FAIL)
+    if result.exit_code != EXIT_PASS:
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command()
@@ -349,12 +372,16 @@ def report(
         Path | None,
         typer.Option("--sarif", help="Write SARIF 2.1.0 report to this path."),
     ] = None,
+    html: Annotated[
+        Path | None,
+        typer.Option("--html", help="Write zero-CDN offline HTML Certification Report."),
+    ] = None,
     json_out: Annotated[
         Path | None,
         typer.Option("--json-out", help="Re-serialize validated AuditReport JSON to this path."),
     ] = None,
 ) -> None:
-    """Re-render SARIF 2.1.0 or validated JSON artifacts from a saved report.json."""
+    """Re-render SARIF 2.1.0, offline HTML, or validated JSON artifacts from report.json."""
     if not report_json.is_file():
         typer.echo(f"Error: Report file not found: {report_json}", err=True)
         raise typer.Exit(code=EXIT_CONFIG_ERROR)
@@ -367,10 +394,13 @@ def report(
     if sarif is not None:
         write_sarif(loaded, sarif)
         typer.echo(f"Wrote SARIF 2.1.0 report to {sarif}")
+    if html is not None:
+        write_html_report(loaded, html)
+        typer.echo(f"Wrote HTML Certification Report to {html}")
     if json_out is not None:
         write_report_json(loaded, json_out)
         typer.echo(f"Wrote AuditReport JSON to {json_out}")
-    if sarif is None and json_out is None:
+    if sarif is None and html is None and json_out is None:
         typer.echo(
             f"Validated AuditReport for '{loaded.env_spec.task_id}' "
             f"(Grade {loaded.grade}, {len(loaded.findings)} finding(s))."

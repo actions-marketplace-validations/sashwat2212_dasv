@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dasv Certification Report — {{ report.env_spec.task_id }} (Grade {{ report.grade }})</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --surface: #131a26;
+      --surface-2: #1a2435;
+      --border: #26334a;
+      --text: #e6edf7;
+      --muted: #93a4bd;
+      --accent: #38bdf8;
+      --green: #22c55e;
+      --lime: #84cc16;
+      --amber: #f59e0b;
+      --orange: #f97316;
+      --red: #ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.5;
+    }
+    .container { max-width: 1120px; margin: 0 auto; }
+    .header-card {
+      background: linear-gradient(135deg, #131a26 0%, #192438 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 24px;
+      align-items: center;
+    }
+    @media (max-width: 780px) {
+      .header-card { grid-template-columns: 1fr; }
+    }
+    .brand {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+    h1 { margin: 0 0 8px 0; font-size: 24px; font-weight: 700; }
+    .meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .chip {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      color: var(--muted);
+    }
+    .chip strong { color: var(--text); font-weight: 600; }
+    .banner-warn {
+      margin-top: 16px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--amber);
+      background: rgba(245, 158, 11, 0.12);
+      color: #fde68a;
+      font-size: 13px;
+    }
+    .section {
+      margin-top: 22px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .section h2 {
+      margin: 0 0 14px 0;
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .kpi {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .kpi-label { font-size: 12px; color: var(--muted); }
+    .kpi-val {
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+    .chart-wrap { margin-top: 16px; overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pill {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+      text-transform: uppercase;
+    }
+    .sev-critical { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid #ef4444; }
+    .sev-high { background: rgba(249, 115, 22, 0.2); color: #fdba74; border: 1px solid #f97316; }
+    .sev-medium { background: rgba(245, 158, 11, 0.2); color: #fde047; border: 1px solid #f59e0b; }
+    .sev-low { background: rgba(56, 189, 248, 0.2); color: #7dd3fc; border: 1px solid #38bdf8; }
+    .sev-info { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; border: 1px solid #64748b; }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .muted { color: var(--muted); }
+    pre {
+      margin: 8px 0 0 0;
+      padding: 10px;
+      background: #090d14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    details summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .filter-btn {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header-card">
+      <div>
+        <div class="brand">dasv &middot; Deterministic Adversarial Sandbox Verifier</div>
+        <h1>{{ report.env_spec.task_id }}</h1>
+        <div class="muted">{{ report.env_spec.instruction_text | truncate(200) }}</div>
+        <div class="meta-chips">
+          <span class="chip">Standard: <strong>{{ report.env_spec.standard.value }}</strong></span>
+          <span class="chip">Rubric: <strong>{{ report.env_spec.rubric_type }}</strong></span>
+          <span class="chip">Run: <strong>{{ report.manifest.run_id }}</strong></span>
+          <span class="chip">Dataset SHA: <strong>{{ report.manifest.dataset_sha256[:12] }}</strong></span>
+          <span class="chip">Cost: <strong>${{ "%.4f"|format(report.manifest.total_cost_usd) }}</strong></span>
+        </div>
+      </div>
+
+      <!-- Inline SVG Grade Badge -->
+      <div aria-label="Certification Grade {{ report.grade }}">
+        <svg width="112" height="112" viewBox="0 0 112 112" role="img">
+          <rect x="4" y="4" width="104" height="104" rx="18" fill="#0f172a" stroke="{{ grade_color }}" stroke-width="4"/>
+          <text x="56" y="26" text-anchor="middle" fill="#93a4bd" font-size="11" font-family="monospace">GRADE</text>
+          <text x="56" y="76" text-anchor="middle" fill="{{ grade_color }}" font-size="52" font-weight="700" font-family="sans-serif">{{ report.grade }}</text>
+          <text x="56" y="96" text-anchor="middle" fill="#cbd5e1" font-size="10" font-family="monospace">{{ grade_label }}</text>
+        </svg>
+      </div>
+
+      <!-- Inline SVG HackabilityScore Gauge -->
+      <div aria-label="Hackability Score {{ hack_score_display }}">
+        <svg width="144" height="112" viewBox="0 0 144 112" role="img">
+          <circle cx="72" cy="60" r="40" fill="none" stroke="#1e293b" stroke-width="10"/>
+          <circle cx="72" cy="60" r="40" fill="none" stroke="{{ hack_gauge_color }}" stroke-width="10"
+                  stroke-dasharray="{{ hack_gauge_dash }} 251.33" stroke-linecap="round"
+                  transform="rotate(-90 72 60)"/>
+          <text x="72" y="58" text-anchor="middle" fill="#e6edf7" font-size="20" font-weight="700" font-family="monospace">{{ hack_score_display }}</text>
+          <text x="72" y="74" text-anchor="middle" fill="#93a4bd" font-size="9" font-family="monospace">HACKABILITY</text>
+          <text x="72" y="106" text-anchor="middle" fill="#93a4bd" font-size="10" font-family="monospace">0 (SAFE) - 100</text>
+        </svg>
+      </div>
+    </header>
+
+    {% if report.determinism and report.determinism.emulated_arch_warning %}
+    <div class="banner-warn" role="alert">
+      <strong>Emulated Architecture Warning:</strong> Container trials ran under cross-architecture emulation
+      ({{ report.manifest.host_os }}/{{ report.manifest.host_arch }} vs. Docker {{ report.manifest.docker_server_arch or "unknown" }}).
+      Do not publish emulated latency or timing benchmarks; run official certifications on native <code>linux/amd64</code> CI.
+    </div>
+    {% endif %}
+
+    {% if report.determinism %}
+    <section class="section">
+      <h2>
+        <span>Determinism &amp; Replay Reliability (Tier 1)</span>
+        <span class="mono muted">Oracle {{ report.determinism.oracle_trials }}x &middot; No-op {{ report.determinism.noop_trials }}x</span>
+      </h2>
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="kpi-label">Oracle Pass Rate</div>
+          <div class="kpi-val">{{ "%.1f%%"|format(report.determinism.oracle_pass_rate * 100) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">No-op False Positive</div>
+          <div class="kpi-val">{{ "%.1f%%"|format(report.determinism.noop_pass_rate * 100) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Replay Variance</div>
+          <div class="kpi-val">{{ "%.6f"|format(report.determinism.replay_variance) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">pass@1</div>
+          <div class="kpi-val">{{ "%.3f"|format(report.determinism.pass_at_1) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Latency p50 / p95</div>
+          <div class="kpi-val">{{ "%.0f"|format(report.determinism.latency_p50_ms) }} / {{ "%.0f"|format(report.determinism.latency_p95_ms) }} ms</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Peak Memory</div>
+          <div class="kpi-val">{{ "%.1f"|format(report.determinism.peak_memory_mb) }} MB</div>
+        </div>
+      </div>
+
+      {% if pass_pow_bars %}
+      <div class="chart-wrap">
+        <svg width="{{ pass_pow_svg_width }}" height="148" viewBox="0 0 {{ pass_pow_svg_width }} 148" role="img" aria-label="pass^k reliability decay chart">
+          <text x="12" y="18" fill="#93a4bd" font-size="11" font-family="monospace">pass^k RELIABILITY DECAY</text>
+          <line x1="12" y1="118" x2="{{ pass_pow_svg_width - 12 }}" y2="118" stroke="#26334a" stroke-width="1"/>
+          {% for bar in pass_pow_bars %}
+          <rect x="{{ bar.x }}" y="{{ bar.y }}" width="44" height="{{ bar.height }}" rx="4" fill="{{ bar.color }}"/>
+          <text x="{{ bar.x + 22 }}" y="{{ bar.y - 6 }}" text-anchor="middle" fill="#e6edf7" font-size="11" font-family="monospace">{{ bar.pct_label }}</text>
+          <text x="{{ bar.x + 22 }}" y="136" text-anchor="middle" fill="#93a4bd" font-size="11" font-family="monospace">k={{ bar.k }}</text>
+          {% endfor %}
+        </svg>
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="section">
+      <h2>
+        <span>Audit Findings</span>
+        <span class="mono muted">{{ report.findings | length }} total</span>
+      </h2>
+      {% if report.findings %}
+      <div class="filters" role="group" aria-label="Filter findings by severity">
+        <button class="filter-btn active" type="button" onclick="dasvFilter('all', this)">All ({{ report.findings | length }})</button>
+        {% for sev in severity_counts %}
+        <button class="filter-btn" type="button" onclick="dasvFilter('{{ sev.name }}', this)">{{ sev.name | upper }} ({{ sev.count }})</button>
+        {% endfor %}
+      </div>
+      <table id="findings-table">
+        <thead>
+          <tr>
+            <th>Rule</th>
+            <th>Severity</th>
+            <th>Tier</th>
+            <th>Location</th>
+            <th>Details &amp; Remediation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in report.findings %}
+          <tr data-severity="{{ f.severity.value }}">
+            <td class="mono"><strong>{{ f.rule_id }}</strong><div class="muted">{{ f.source }}</div></td>
+            <td><span class="pill sev-{{ f.severity.value }}">{{ f.severity.value }}</span></td>
+            <td class="mono">T{{ f.tier }}</td>
+            <td class="mono">{{ f.file_path or "-" }}{% if f.file_path and f.line_number %}:{{ f.line_number }}{% endif %}</td>
+            <td>
+              <div><strong>{{ f.title }}</strong></div>
+              <pre>{{ f.evidence }}</pre>
+              <div class="muted" style="margin-top:6px;">Remediation: {{ f.remediation }}</div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="muted">No security, hermeticity, or determinism findings detected.</div>
+      {% endif %}
+    </section>
+
+    {% if report.exploits %}
+    <section class="section">
+      <h2>
+        <span>Adversarial Exploit Traces &amp; Gold-Sanity Verdicts (Tier 2)</span>
+        <span class="mono muted">{{ report.exploits | length }} trace(s)</span>
+      </h2>
+      {% for ex in report.exploits %}
+      <details style="margin-bottom:12px;">
+        <summary>
+          <span class="mono">{{ ex.exploit_id }}</span> &middot; {{ ex.hack_class }} &middot;
+          reward={{ "%.2f"|format(ex.reward_obtained) }} &middot;
+          status=<strong>{{ ex.gold_sanity_status }}</strong>
+        </summary>
+        {% if ex.proposed_fix_diff %}
+        <pre>{{ ex.proposed_fix_diff }}</pre>
+        {% endif %}
+      </details>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if report.signal_profile %}
+    <section class="section">
+      <h2>
+        <span>RLVR Policy-Gradient Signal Profile (Tier 3)</span>
+        <span class="mono muted">{{ report.signal_profile.base_model }} (G={{ report.signal_profile.rollouts_g }})</span>
+      </h2>
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="kpi-label">Curriculum Bucket</div>
+          <div class="kpi-val">{{ report.signal_profile.bucket.value }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Baseline pass@1</div>
+          <div class="kpi-val">{{ "%.1f%%"|format(report.signal_profile.pass_at_1 * 100) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Advantage Variance</div>
+          <div class="kpi-val">{{ "%.4f"|format(report.signal_profile.advantage_variance) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Zero-Grad Risk</div>
+          <div class="kpi-val">{{ "YES" if report.signal_profile.zero_grad_risk else "NO" }}</div>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    <footer class="section">
+      <h2>
+        <span>Reproducibility Manifest</span>
+        <span class="mono muted">schema v{{ report.schema_version }}</span>
+      </h2>
+      <div class="footer-grid mono">
+        <div><span class="muted">dasv_version:</span> {{ report.manifest.dasv_version }}</div>
+        <div><span class="muted">timestamp_utc:</span> {{ report.manifest.timestamp_utc }}</div>
+        <div><span class="muted">host:</span> {{ report.manifest.host_os }}/{{ report.manifest.host_arch }}</div>
+        <div><span class="muted">docker_arch:</span> {{ report.manifest.docker_server_arch or "n/a" }}</div>
+        <div><span class="muted">git_sha:</span> {{ report.manifest.git_sha or "n/a" }}</div>
+        <div><span class="muted">rng_seed:</span> {{ report.manifest.rng_seed }}</div>
+        <div><span class="muted">tokens:</span> {{ report.manifest.total_tokens }}</div>
+        <div><span class="muted">cost_usd:</span> ${{ "%.4f"|format(report.manifest.total_cost_usd) }}</div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    function dasvFilter(sev, btn) {
+      document.querySelectorAll('.filter-btn').forEach(function (b) { b.classList.remove('active'); });
+      if (btn) { btn.classList.add('active'); }
+      document.querySelectorAll('#findings-table tbody tr').forEach(function (row) {
+        row.style.display = (sev === 'all' || row.getAttribute('data-severity') === sev) ? '' : 'none';
+      });
+    }
+  </script>
+</body>
+</html>
