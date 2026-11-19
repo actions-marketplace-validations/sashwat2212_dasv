@@ -158,4 +158,3 @@ def test_html_report_escapes_xss_payloads(tmp_path: Path) -> None:
     assert "<img src=x onerror=alert(2)>" not in html
     assert "&lt;script&gt;alert(&#34;xss&#34;)&lt;/script&gt;" in html
     assert "&lt;img src=x onerror=alert(2)&gt;" in html
-
