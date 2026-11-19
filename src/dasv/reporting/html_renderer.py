@@ -120,3 +120,4 @@ def write_html_report(report: AuditReport, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_html_report(report), encoding="utf-8")
     return path
+
