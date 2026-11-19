@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dasv"
+version = "0.1.0"
+description = "Deterministic Adversarial Sandbox Verifier — pre-flight adversarial security, construct-validity, and RLVR policy-gradient signal auditor for RL post-training environments."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [{ name = "dasv contributors" }]
+keywords = [
+    "rlvr",
+    "post-training",
+    "reinforcement-learning",
+    "reward-hacking",
+    "sandbox",
+    "verifier",
+    "sarif",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security",
+]
+dependencies = [
+    "pydantic>=2.7,<3",
+    "typer>=0.12",
+    "rich>=13.7",
+    "httpx>=0.27",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+dasv = "dasv.cli.app:main"
+
+[project.entry-points."dasv.adapters"]
+harbor = "dasv.adapters.harbor:HarborAdapter"
+openenv = "dasv.adapters.openenv:OpenEnvAdapter"
+verifiers_v1 = "dasv.adapters.verifiers_v1:VerifiersV1Adapter"
+hud = "dasv.adapters.hud:HudAdapter"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dasv"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

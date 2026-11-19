@@ -1,0 +1,28 @@
+[project]
+default_tiers = [0, 1]
+fail_on = "high"                  # critical | high | medium | low
+strict_arch_benchmark = true      # Warn/block publishing latency stats under QEMU emulation
+
+[sandbox]
+runtime = "docker"                # docker (v0.1) | modal (Stage 7 plugin)
+network_mode = "none"
+cpus = 2.0
+memory = "2g"
+pids_limit = 256
+episode_timeout_sec = 120
+max_concurrent = 4
+
+[determinism]
+oracle_replays = 10
+noop_replays = 3
+
+[budget]
+max_cost_usd = 2.00
+max_tokens = 250000
+max_redteam_turns = 12
+
+[llm]
+provider = "openai_compat"        # Supports Ollama, MLX server, vLLM, OpenRouter, OpenAI
+base_url = "http://localhost:11434/v1"
+attacker_model = "qwen2.5-coder:7b"
+fixer_model = "qwen2.5-coder:7b"

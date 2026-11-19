@@ -1,0 +1,125 @@
+"""CLI smoke tests for dasv --version, doctor, inspect, audit --tiers 0, report, and stubs."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from dasv import __version__
+from dasv.cli.app import app
+from dasv.core.errors import EXIT_AUDIT_FAIL, EXIT_CONFIG_ERROR, EXIT_PASS
+from dasv.core.schemas import AuditReport, EnvSpec, EnvStandard
+
+runner = CliRunner()
+
+
+def test_cli_version_and_doctor() -> None:
+    ver_res = runner.invoke(app, ["--version"])
+    assert ver_res.exit_code == EXIT_PASS
+    assert f"dasv {__version__}" in ver_res.stdout
+
+    doc_res = runner.invoke(app, ["doctor"])
+    assert doc_res.exit_code == EXIT_PASS
+    assert "Python >= 3.11" in doc_res.stdout
+    assert "Docker Runtime" in doc_res.stdout
+
+
+def test_cli_inspect_harbor_openenv_and_verifiers(
+    hardened_harbor_env: Path,
+    minimal_openenv: Path,
+    minimal_verifiers_v1: Path,
+) -> None:
+    for path, expected in (
+        (hardened_harbor_env, EnvStandard.HARBOR),
+        (minimal_openenv, EnvStandard.OPENENV),
+        (minimal_verifiers_v1, EnvStandard.VERIFIERS_V1),
+    ):
+        res = runner.invoke(app, ["inspect", str(path), "--json"])
+        assert res.exit_code == EXIT_PASS, res.stderr
+        spec = EnvSpec.model_validate_json(res.stdout)
+        assert spec.standard == expected
+
+
+def test_cli_audit_tier0_pass_and_fail_with_sarif_and_report(
+    hardened_harbor_env: Path,
+    vulnerable_harbor_env: Path,
+    legacy_verifiers_v0: Path,
+    tmp_path: Path,
+) -> None:
+    # 1. Hardened Harbor passes with Grade A and exit 0
+    clean_out = tmp_path / "clean_run"
+    clean_sarif = clean_out / "report.sarif"
+    res_ok = runner.invoke(
+        app,
+        [
+            "audit",
+            str(hardened_harbor_env),
+            "--tiers",
+            "0",
+            "--no-native",
+            "--out-dir",
+            str(clean_out),
+            "--sarif",
+            str(clean_sarif),
+        ],
+    )
+    assert res_ok.exit_code == EXIT_PASS, res_ok.stdout + res_ok.stderr
+    clean_report = AuditReport.model_validate_json(
+        (clean_out / "report.json").read_text(encoding="utf-8")
+    )
+    assert clean_report.grade == "A"
+    assert clean_report.hackability_score == 0.0
+    assert (clean_out / "manifest.json").is_file()
+    assert json.loads(clean_sarif.read_text(encoding="utf-8"))["version"] == "2.1.0"
+
+    # 2. Vulnerable Harbor fails with Grade F and exit 1
+    vuln_out = tmp_path / "vuln_run"
+    vuln_sarif = vuln_out / "report.sarif"
+    res_fail = runner.invoke(
+        app,
+        [
+            "audit",
+            str(vulnerable_harbor_env),
+            "--tiers",
+            "0",
+            "--no-native",
+            "--out-dir",
+            str(vuln_out),
+            "--sarif",
+            str(vuln_sarif),
+        ],
+    )
+    assert res_fail.exit_code == EXIT_AUDIT_FAIL
+    vuln_report = AuditReport.model_validate_json(
+        (vuln_out / "report.json").read_text(encoding="utf-8")
+    )
+    assert vuln_report.grade == "F"
+    sarif_rules = {
+        r["ruleId"]
+        for r in json.loads(vuln_sarif.read_text(encoding="utf-8"))["runs"][0]["results"]
+    }
+    assert {"RULE-BNDY-001", "RULE-BNDY-002", "RULE-BNDY-003", "RULE-BNDY-004"}.issubset(
+        sarif_rules
+    )
+
+    # 3. `dasv report` re-renders SARIF cleanly from saved report.json
+    rerendered_sarif = tmp_path / "rerendered.sarif"
+    rep_res = runner.invoke(
+        app, ["report", str(vuln_out / "report.json"), "--sarif", str(rerendered_sarif)]
+    )
+    assert rep_res.exit_code == EXIT_PASS
+    assert json.loads(rerendered_sarif.read_text(encoding="utf-8"))["version"] == "2.1.0"
+
+    # 4. Legacy verifiers v0 fails Tier 0 with RULE-ADPT-001
+    v0_res = runner.invoke(app, ["audit", str(legacy_verifiers_v0), "--tiers", "0", "--no-native"])
+    assert v0_res.exit_code == EXIT_AUDIT_FAIL
+    assert "RULE-ADPT-001" in v0_res.stdout
+
+
+def test_cli_stage6_stubs_return_config_error(hardened_harbor_env: Path) -> None:
+    for cmd in ("mutate", "redteam", "rubric", "profile"):
+        res = runner.invoke(app, [cmd, str(hardened_harbor_env)])
+        assert res.exit_code == EXIT_CONFIG_ERROR
+        assert "Stage 6" in res.stderr
