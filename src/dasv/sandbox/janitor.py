@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from contextlib import suppress
 
 from pydantic import BaseModel, Field
@@ -11,6 +12,41 @@ from pydantic import BaseModel, Field
 from dasv.sandbox.provider import SandboxHandle, SandboxProvider
 
 logger = logging.getLogger(__name__)
+
+_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+
+
+def _is_hex_container_id(cid: str) -> bool:
+    return len(cid) >= 12 and all(ch in _HEX_CHARS for ch in cid)
+
+
+def _same_container_id(a: str, b: str) -> bool:
+    """Return True if two container IDs are equal or 12+ char hex prefix aliases of one another."""
+    if a == b:
+        return True
+    if _is_hex_container_id(a) and _is_hex_container_id(b):
+        return a.startswith(b) or b.startswith(a)
+    return False
+
+
+def _dedupe_container_ids(ids: Iterable[str]) -> list[str]:
+    """Deduplicate IDs, collapsing shorter hex prefixes into matching longer hex IDs."""
+    cleaned = sorted({cid.strip() for cid in ids if cid.strip()})
+    hex_ids = [cid for cid in cleaned if _is_hex_container_id(cid)]
+    result: list[str] = []
+    for cid in cleaned:
+        if _is_hex_container_id(cid) and any(
+            other != cid and other.startswith(cid) and len(other) > len(cid) for other in hex_ids
+        ):
+            continue
+        result.append(cid)
+    return result
+
+
+def _stderr_is_only_not_found(stderr: str) -> bool:
+    """Return True if every non-empty stderr line reports an already-absent container."""
+    lines = [line.strip().lower() for line in stderr.splitlines() if line.strip()]
+    return bool(lines) and all("no such container" in line for line in lines)
 
 
 class ReapReport(BaseModel):
@@ -54,11 +90,16 @@ class ContainerJanitor:
         self.register(handle.container_id, effective_run_id, handle=handle)
 
     def unregister(self, container_id: str) -> None:
-        """Remove a container ID once it has been confirmed stopped and removed."""
+        """Remove a container ID (and any hex prefix/full alias) once confirmed removed."""
         cleaned = container_id.strip()
+        if not cleaned:
+            return
         for ids in self._tracked_by_run.values():
-            ids.discard(cleaned)
-        self._handles_by_id.pop(cleaned, None)
+            to_drop = {existing for existing in ids if _same_container_id(existing, cleaned)}
+            ids.difference_update(to_drop)
+        for existing in list(self._handles_by_id):
+            if _same_container_id(existing, cleaned):
+                self._handles_by_id.pop(existing, None)
 
     def tracked_ids(self, run_id: str | None = None) -> set[str]:
         """Return currently tracked container IDs (optionally scoped to `run_id`)."""
@@ -101,11 +142,11 @@ class ContainerJanitor:
         )
 
     async def list_labeled_containers(self, run_id: str, *, timeout_sec: float = 5.0) -> list[str]:
-        """Query `docker ps -aq --filter label=dasv.run_id=<run_id>`."""
+        """Query `docker ps -aq --filter label=dasv.run_id=<run_id> --no-trunc`."""
         if not run_id.strip():
             return []
         res = await self._run_docker_cmd(
-            ["ps", "-aq", "--filter", f"label=dasv.run_id={run_id}"],
+            ["ps", "-aq", "--filter", f"label=dasv.run_id={run_id}", "--no-trunc"],
             timeout_sec=timeout_sec,
         )
         if res is None:
@@ -113,7 +154,7 @@ class ContainerJanitor:
         rc, stdout, _stderr = res
         if rc != 0:
             return []
-        return [line.strip() for line in stdout.splitlines() if line.strip()]
+        return _dedupe_container_ids(stdout.splitlines())
 
     async def reap_all(self, run_id: str, *, grace_timeout_sec: float = 10.0) -> ReapReport:
         """Force-remove every tracked or labeled container for `run_id` and verify zero orphans."""
@@ -123,7 +164,7 @@ class ContainerJanitor:
         docker_labeled = set(
             await self.list_labeled_containers(run_id, timeout_sec=min(5.0, grace_timeout_sec))
         )
-        all_ids = sorted(tracked | docker_labeled)
+        all_ids = _dedupe_container_ids(tracked | docker_labeled)
 
         report = ReapReport(run_id=run_id, discovered_ids=all_ids)
         if not all_ids:
@@ -131,13 +172,14 @@ class ContainerJanitor:
             return report
 
         removed: set[str] = set()
+        possibly_gone: set[str] = set()
         remaining_for_docker: list[str] = []
 
         # If a custom SandboxProvider is bound, reap tracked handles through it first.
         if self._provider is not None:
             for cid in all_ids:
                 handle = self._handles_by_id.get(cid)
-                if handle is None and cid in tracked:
+                if handle is None and any(_same_container_id(cid, t) for t in tracked):
                     handle = SandboxHandle(
                         container_id=cid,
                         image_digest="unknown",
@@ -173,9 +215,21 @@ class ContainerJanitor:
                         f"docker CLI unavailable while reaping container(s): {', '.join(batch)}"
                     )
                     continue
-                rc, _stdout, stderr = res
+                rc, stdout, stderr = res
                 if rc == 0:
                     removed.update(batch)
+                    continue
+
+                # Parse any partial removals Docker printed to stdout before exiting non-zero.
+                printed_removed = [line.strip() for line in stdout.splitlines() if line.strip()]
+                for cid in batch:
+                    if any(_same_container_id(cid, out_id) for out_id in printed_removed):
+                        removed.add(cid)
+
+                if _stderr_is_only_not_found(stderr):
+                    for cid in batch:
+                        if cid not in removed:
+                            possibly_gone.add(cid)
                 else:
                     report.errors.append(
                         f"docker rm -f exited {rc}: {stderr.strip() or 'unknown error'}"
@@ -185,9 +239,21 @@ class ContainerJanitor:
         survivors_docker = set(
             await self.list_labeled_containers(run_id, timeout_sec=min(5.0, grace_timeout_sec))
         )
-        unremoved = sorted((set(all_ids) - removed) | survivors_docker)
 
-        for cid in removed - survivors_docker:
+        # Any container that returned "No such container" and is absent post-reap is gone.
+        for cid in possibly_gone:
+            if not any(_same_container_id(cid, surv) for surv in survivors_docker):
+                removed.add(cid)
+
+        still_alive = {
+            cid
+            for cid in removed
+            if any(_same_container_id(cid, surv) for surv in survivors_docker)
+        }
+        confirmed_removed = removed - still_alive
+        unremoved = _dedupe_container_ids((set(all_ids) - confirmed_removed) | survivors_docker)
+
+        for cid in confirmed_removed:
             self.unregister(cid)
 
         if not unremoved:
@@ -197,6 +263,6 @@ class ContainerJanitor:
             for cid in unremoved:
                 logger.error("RUNTIME_ERROR: stubborn container survived reap_all: %s", cid)
 
-        report.removed_ids = sorted(removed - survivors_docker)
+        report.removed_ids = sorted(confirmed_removed)
         report.stubborn_ids = unremoved
         return report

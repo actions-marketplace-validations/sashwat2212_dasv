@@ -162,7 +162,8 @@ async def test_janitor_label_isolation_and_stubborn_orphan_reporting(
     async def fake_exec(*args: str, **kwargs: Any) -> Any:
         _ = kwargs
         if args[1] == "ps":
-            filter_val = args[4]
+            assert "--no-trunc" in args
+            filter_val = args[args.index("--filter") + 1]
             ps_filters.append(filter_val)
             if filter_val == "label=dasv.run_id=run-a":
                 # Simulate ctr-stubborn surviving rm -f

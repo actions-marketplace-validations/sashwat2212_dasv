@@ -235,6 +235,91 @@ async def test_container_janitor_with_fake_provider_and_stubborn_detection(
     assert fake_provider.removed_ids == [handle.container_id]
 
 
+async def test_container_janitor_dedupes_short_and_full_ids_and_handles_no_such_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    full_id = "0f94585965c413ed57e6b4c1a7cecd69cb01c11efefc8a1a36228d0d49a96f27"
+    short_id = full_id[:12]
+    other_id = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+    # Case 1: tracked has 64-char ID while docker ps returns 12-char prefix -> deduped cleanly
+    ps_args_seen: list[list[str]] = []
+    rm_batches: list[list[str]] = []
+    ps_calls = 0
+
+    async def fake_exec_dedupe(*args: str, **kwargs: Any) -> Any:
+        nonlocal ps_calls
+        _ = kwargs
+        if args[1] == "ps":
+            ps_args_seen.append(list(args))
+            ps_calls += 1
+            if ps_calls == 1:
+                return make_fake_process(returncode=0, stdout=f"{short_id}\n".encode())
+            return make_fake_process(returncode=0, stdout=b"")
+        if args[1] == "rm":
+            rm_batches.append(list(args[3:]))
+            return make_fake_process(returncode=0, stdout=f"{full_id}\n".encode())
+        return make_fake_process(returncode=1, stderr=b"unexpected")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_dedupe)
+    janitor = ContainerJanitor()
+    janitor.register(full_id, "run-dedupe")
+    rep = await janitor.reap_all("run-dedupe")
+
+    assert all("--no-trunc" in cmd for cmd in ps_args_seen)
+    assert rep.discovered_ids == [full_id]
+    assert rm_batches == [[full_id]]
+    assert rep.removed_ids == [full_id]
+    assert rep.stubborn_ids == []
+    assert rep.errors == []
+    assert janitor.tracked_ids("run-dedupe") == set()
+
+    # Case 2: concurrent removal race (one removed on stdout, one "No such container" rc=1)
+    ps_calls = 0
+
+    async def fake_exec_race(*args: str, **kwargs: Any) -> Any:
+        nonlocal ps_calls
+        _ = kwargs
+        if args[1] == "ps":
+            ps_calls += 1
+            if ps_calls == 1:
+                return make_fake_process(returncode=0, stdout=f"{full_id}\n".encode())
+            return make_fake_process(returncode=0, stdout=b"")
+        if args[1] == "rm":
+            return make_fake_process(
+                returncode=1,
+                stdout=f"{full_id}\n".encode(),
+                stderr=f"Error response from daemon: No such container: {other_id}\n".encode(),
+            )
+        return make_fake_process(returncode=1, stderr=b"unexpected")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_race)
+    janitor_race = ContainerJanitor()
+    janitor_race.register(full_id, "run-race")
+    janitor_race.register(other_id, "run-race")
+    rep_race = await janitor_race.reap_all("run-race")
+    assert sorted(rep_race.removed_ids) == sorted([full_id, other_id])
+    assert rep_race.stubborn_ids == []
+    assert rep_race.errors == []
+    assert janitor_race.tracked_ids("run-race") == set()
+
+    # Case 3: real daemon failure (permission denied) still flags stubborn_ids & errors
+    async def fake_exec_denied(*args: str, **kwargs: Any) -> Any:
+        _ = kwargs
+        if args[1] == "ps":
+            return make_fake_process(returncode=0, stdout=f"{full_id}\n".encode())
+        if args[1] == "rm":
+            return make_fake_process(returncode=1, stderr=b"permission denied\n")
+        return make_fake_process(returncode=1, stderr=b"unexpected")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_denied)
+    janitor_err = ContainerJanitor()
+    janitor_err.register(full_id, "run-err")
+    rep_err = await janitor_err.reap_all("run-err")
+    assert rep_err.stubborn_ids == [full_id]
+    assert any("permission denied" in err for err in rep_err.errors)
+
+
 async def test_runtime_boundary_probes_clean_vs_vulnerable(tmp_path: Path) -> None:
     spec = EnvSpec(
         task_id="probe-test",
