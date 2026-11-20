@@ -1,0 +1,8 @@
+{
+  "commit_message": "Add gold solution/solve.sh and hidden tests",
+  "files_to_commit": [
+    "solution/solve.sh",
+    "tests/test.sh",
+    "task.toml"
+  ]
+}

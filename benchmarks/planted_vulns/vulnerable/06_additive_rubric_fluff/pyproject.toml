@@ -1,0 +1,4 @@
+[project]
+name = "planted-additive-rubric"
+version = "0.1.0"
+dependencies = ["verifiers>=1.0.0"]

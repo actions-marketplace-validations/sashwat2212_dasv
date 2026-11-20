@@ -1,0 +1,8 @@
+[metadata]
+name = "planted-exit-zero-spoof"
+
+[environment]
+network_mode = "no-network"
+
+[verifier]
+test_path = "tests/test_solver.py"

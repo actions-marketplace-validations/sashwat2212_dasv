@@ -1,0 +1,3 @@
+FROM python:3.12-slim@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+ENV OPENAI_API_KEY=sk-proj-plantedsecret1234567890
+WORKDIR /app

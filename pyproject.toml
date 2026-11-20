@@ -62,7 +62,7 @@ packages = ["src/dasv"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-extend-exclude = ["docs"]
+extend-exclude = ["docs", "benchmarks/planted_vulns"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

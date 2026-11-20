@@ -1,0 +1,8 @@
+[metadata]
+name = "planted-git-history-leak"
+
+[environment]
+network_mode = "no-network"
+
+[verifier]
+test_path = "tests/test.sh"

@@ -1,0 +1,8 @@
+[metadata]
+name = "hardened-calculator-ctrl"
+
+[environment]
+network_mode = "no-network"
+
+[verifier]
+test_path = "tests/test.sh"
