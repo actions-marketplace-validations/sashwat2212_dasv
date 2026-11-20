@@ -59,6 +59,7 @@ class TierHookResult:
     mutation_survival_rate: float | None = None
     signal_profile: SignalProfile | None = None
     models_used: list[str] = field(default_factory=list[str])
+    budget_exceeded: bool = False
 
 
 TierHook = Callable[["AuditContext", list[AuditFinding]], Awaitable[TierHookResult]]
@@ -393,17 +394,21 @@ class TieredAuditOrchestrator:
                     if res2.mutation_survival_rate is not None:
                         mutation_survival_rate = res2.mutation_survival_rate
                     models_used.extend(res2.models_used)
+                    if res2.budget_exceeded:
+                        budget_exceeded = True
                 else:
                     findings.append(self._deferred_tier_finding(2))
 
             # Tier 3: Budget-capped RLVR signal profiling (M2/M3 hook).
-            if 3 in tiers and not short_circuited:
+            if 3 in tiers and not short_circuited and not budget_exceeded:
                 if self._tier3_hook is not None:
                     res3 = await self._tier3_hook(ctx, findings)
                     findings.extend(res3.findings)
                     if res3.signal_profile is not None:
                         signal_profile = res3.signal_profile
                     models_used.extend(res3.models_used)
+                    if res3.budget_exceeded:
+                        budget_exceeded = True
                 else:
                     findings.append(self._deferred_tier_finding(3))
 

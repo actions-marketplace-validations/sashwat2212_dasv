@@ -26,6 +26,12 @@ from dasv.verifier.determinism import (
     DeterminismRunner,
     TrialRecord,
 )
+from dasv.verifier.gold_sanity import (
+    GoldSanityGate,
+    GoldSanityResult,
+    apply_unified_diff_to_dir,
+    validate_safe_unified_diff,
+)
 
 __all__ = [
     "ArtifactExtractor",
@@ -33,10 +39,13 @@ __all__ = [
     "DeterminismResult",
     "DeterminismRunner",
     "ExtractedArtifact",
+    "GoldSanityGate",
+    "GoldSanityResult",
     "GradeOutcome",
     "GradingContext",
     "TrialRecord",
     "VERIFIER_MOUNT_PATH",
+    "apply_unified_diff_to_dir",
     "build_tamper_findings",
     "coerce_grading_context",
     "compute_artifact_sha256",
@@ -46,4 +55,5 @@ __all__ = [
     "parse_verifier_reward",
     "resolve_verifier_command",
     "resolve_verifier_host_dir",
+    "validate_safe_unified_diff",
 ]

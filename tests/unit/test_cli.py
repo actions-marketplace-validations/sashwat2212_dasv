@@ -194,7 +194,34 @@ def test_cli_mutate_dry_run_and_remaining_stage6_stubs(
     assert mut_data["one_off_mutations_generated"] == 1
     assert len(mut_data["conflicting_variants"]) == 1
 
-    for cmd in ("redteam", "rubric", "profile"):
+    for cmd in ("rubric", "profile"):
         res = runner.invoke(app, [cmd, str(hardened_harbor_env)])
         assert res.exit_code == EXIT_CONFIG_ERROR
         assert "Stage 6" in res.stderr
+
+
+def test_cli_redteam_config_and_runtime_error_contracts(
+    hardened_harbor_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    # 1. Invalid hack class -> EXIT_CONFIG_ERROR (2)
+    bad_hc = runner.invoke(
+        app,
+        ["redteam", str(hardened_harbor_env), "--hack-classes", "not_a_real_class"],
+    )
+    assert bad_hc.exit_code == EXIT_CONFIG_ERROR
+    assert "Invalid hack class" in bad_hc.stderr
+
+    # 2. Missing Docker daemon -> EXIT_RUNTIME_ERROR (4)
+    async def missing_docker(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError("docker not found")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", missing_docker)
+    no_docker = runner.invoke(
+        app,
+        ["redteam", str(hardened_harbor_env), "--hack-classes", "state_bypass"],
+    )
+    assert no_docker.exit_code == EXIT_RUNTIME_ERROR
+    assert "Docker runtime unavailable" in no_docker.stderr

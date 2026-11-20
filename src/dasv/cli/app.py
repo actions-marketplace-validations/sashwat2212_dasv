@@ -16,9 +16,11 @@ from rich.table import Table
 
 from dasv import __version__
 from dasv.adapters.registry import AdapterRegistry
+from dasv.core.budget import BudgetGuard
 from dasv.core.config import load_config
 from dasv.core.errors import (
     EXIT_AUDIT_FAIL,
+    EXIT_BUDGET_EXCEEDED,
     EXIT_CONFIG_ERROR,
     EXIT_NATIVE_ERROR,
     EXIT_PASS,
@@ -31,6 +33,12 @@ from dasv.core.schemas import (
     Severity,
 )
 from dasv.mutate import MutationSuiteRunner
+from dasv.redteam import (
+    RedTeamRunner,
+    UnifiedLLMClient,
+    build_tier2_redteam_hook,
+    parse_hack_classes,
+)
 from dasv.reporting.html_renderer import write_html_report
 from dasv.reporting.json_writer import write_report_json
 from dasv.reporting.sarif_writer import write_sarif
@@ -278,13 +286,29 @@ def audit(
         int | None,
         typer.Option("--max-tokens", min=1, help="Hard total token ceiling."),
     ] = None,
+    redteam_model: Annotated[
+        str | None,
+        typer.Option("--redteam-model", help="Override Tier 2 Hacker/Fixer model ID."),
+    ] = None,
+    base_url: Annotated[
+        str | None,
+        typer.Option("--base-url", help="Override OpenAI-compatible inference base URL."),
+    ] = None,
+    api_key_env: Annotated[
+        str,
+        typer.Option("--api-key-env", help="Env var holding cloud API key (never enters sandbox)."),
+    ] = "OPENAI_API_KEY",
+    propose_fix: Annotated[
+        bool,
+        typer.Option("--propose-fix", help="Run Fixer + GoldSanityGate on Tier 2 exploits."),
+    ] = False,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Optional path to dasv.toml."),
     ] = None,
     seed: Annotated[int, typer.Option("--seed", help="Deterministic RNG seed.")] = 42,
 ) -> None:
-    """Run the tiered audit pipeline (Tier 0 static -> Tier 1 clean-image determinism)."""
+    """Run the tiered audit pipeline (Tier 0 static -> Tier 1 determinism -> Tier 2 red-team)."""
     try:
         cfg = load_config(config_path)
         if max_cost_usd is not None or max_tokens is not None:
@@ -321,7 +345,18 @@ def audit(
         short_circuit=short_circuit,
         run_mutations=with_mutations,
     )
-    orchestrator = TieredAuditOrchestrator()
+    tier2_hook = (
+        build_tier2_redteam_hook(
+            attacker_model=redteam_model,
+            fixer_model=redteam_model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            propose_fix=propose_fix,
+        )
+        if 2 in parsed_tiers
+        else None
+    )
+    orchestrator = TieredAuditOrchestrator(tier2_hook=tier2_hook)
     result = asyncio.run(
         orchestrator.execute(
             ctx,
@@ -436,7 +471,7 @@ def report(
 def _stage6_stub(command_name: str, milestone: str) -> None:
     typer.echo(
         f"`dasv {command_name}` is scheduled for Stage 6 ({milestone}). "
-        "Available now: `doctor`, `inspect`, `audit`, `mutate`, `report`.",
+        "Available now: `doctor`, `inspect`, `audit`, `mutate`, `redteam`, `report`.",
         err=True,
     )
     raise typer.Exit(code=EXIT_CONFIG_ERROR)
@@ -545,21 +580,159 @@ def mutate(
 @app.command()
 def redteam(
     path: Annotated[Path, typer.Argument(help="Path to RL environment directory.")],
+    env_format: Annotated[
+        str | None,
+        typer.Option("--format", help="Force adapter format (harbor, openenv, verifiers_v1, hud)."),
+    ] = None,
     model: Annotated[
-        str, typer.Option("--model", help="Adversarial attacker model ID.")
-    ] = "qwen2.5-coder:7b",
-    max_cost_usd: Annotated[float, typer.Option("--max-cost-usd", help="Hard USD cap.")] = 1.50,
-    max_turns: Annotated[int, typer.Option("--max-turns", help="Max ReAct turns.")] = 12,
+        str | None,
+        typer.Option("--model", help="Adversarial attacker model ID (overrides dasv.toml)."),
+    ] = None,
+    fixer_model: Annotated[
+        str | None,
+        typer.Option("--fixer-model", help="Fixer model ID (defaults to --model)."),
+    ] = None,
+    base_url: Annotated[
+        str | None,
+        typer.Option(
+            "--base-url",
+            help="OpenAI-compatible inference base URL (default: http://localhost:11434/v1).",
+        ),
+    ] = None,
+    api_key_env: Annotated[
+        str,
+        typer.Option("--api-key-env", help="Env var holding cloud API key (never enters sandbox)."),
+    ] = "OPENAI_API_KEY",
+    max_cost_usd: Annotated[
+        float | None,
+        typer.Option("--max-cost-usd", min=0.0, help="Hard USD budget cap."),
+    ] = None,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option("--max-tokens", min=1, help="Hard total token cap."),
+    ] = None,
+    max_turns: Annotated[
+        int | None,
+        typer.Option("--max-turns", min=1, help="Max ReAct turns per hack class."),
+    ] = None,
+    hack_classes: Annotated[
+        str | None,
+        typer.Option(
+            "--hack-classes",
+            help="Comma-separated hack classes (default: all 6 SDD-02 strategies).",
+        ),
+    ] = None,
     propose_fix: Annotated[
-        bool, typer.Option("--propose-fix", help="Generate Fixer unified diff.")
+        bool,
+        typer.Option("--propose-fix", help="Generate Fixer unified diffs + run GoldSanityGate."),
     ] = False,
     gold_sanity_replays: Annotated[
-        int, typer.Option("--gold-sanity-replays", help="Oracle replays.")
+        int,
+        typer.Option("--gold-sanity-replays", min=1, help="Oracle replays in GoldSanityGate."),
     ] = 5,
+    apply_fixes: Annotated[
+        bool,
+        typer.Option(
+            "--apply",
+            help="Apply ONLY GoldSanityGate-verified (`verified_fix`) patches to target env.",
+        ),
+    ] = False,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option("--out-dir", help="Write redteam.json, exploits.jsonl, and fixes/*.diff."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to dasv.toml."),
+    ] = None,
 ) -> None:
-    """Run Tier 2 budget-capped Hacker-Fixer loop & Gold-Sanity Gate (Stage 6 M2)."""
-    _ = (path, model, max_cost_usd, max_turns, propose_fix, gold_sanity_replays)
-    _stage6_stub("redteam", "M2")
+    """Run Tier 2 budget-capped adversarial Hacker-Fixer loop & 3-invariant GoldSanityGate."""
+    try:
+        cfg = load_config(config_path)
+        selected_classes = parse_hack_classes(hack_classes)
+        registry = AdapterRegistry()
+        adapter = registry.resolve(path, forced_format=env_format)
+        spec = adapter.load(path)
+    except DasvError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    effective_base_url = base_url or cfg.llm.base_url
+    effective_attacker = model or cfg.llm.attacker_model
+    effective_fixer = fixer_model or model or cfg.llm.fixer_model
+    effective_max_cost = max_cost_usd if max_cost_usd is not None else cfg.budget.max_cost_usd
+    effective_max_tokens = max_tokens if max_tokens is not None else cfg.budget.max_tokens
+    effective_max_turns = max_turns if max_turns is not None else cfg.budget.max_redteam_turns
+
+    async def _run_redteam() -> int:
+        janitor = ContainerJanitor()
+        run_id = "dasv-redteam"
+        provider = DockerSandboxProvider(janitor=janitor)
+        health = await provider.health_check()
+        if not health.healthy:
+            typer.echo(
+                f"Error: Docker runtime unavailable ({health.detail}). "
+                "Start Docker/OrbStack to execute Tier 2 red-team sandboxes.",
+                err=True,
+            )
+            return EXIT_RUNTIME_ERROR
+
+        budget = BudgetGuard(
+            max_cost_usd=effective_max_cost,
+            max_tokens=effective_max_tokens,
+            base_url=effective_base_url,
+        )
+        llm = UnifiedLLMClient(
+            base_url=effective_base_url,
+            budget=budget,
+            api_key_env=api_key_env,
+        )
+        runner_obj = RedTeamRunner(
+            llm=llm,
+            provider=provider,
+            budget=budget,
+            sandbox_config=cfg.sandbox,
+        )
+        try:
+            rt_report = await runner_obj.run(
+                spec,
+                adapter,
+                attacker_model=effective_attacker,
+                fixer_model=effective_fixer,
+                hack_classes=selected_classes,
+                max_turns=effective_max_turns,
+                propose_fix=propose_fix,
+                gold_sanity_replays=gold_sanity_replays,
+                apply_verified_fixes=apply_fixes,
+                run_id=run_id,
+                out_dir=out_dir,
+            )
+        except DasvError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            return exc.exit_code
+        finally:
+            await janitor.reap_all(run_id)
+
+        table = Table(title=f"Adversarial Red-Team: {spec.task_id}")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value")
+        table.add_row("Attacker Model", rt_report.attacker_model)
+        table.add_row("Hack Classes Attempted", ", ".join(rt_report.hack_classes_attempted))
+        table.add_row("Confirmed Exploits", str(len(rt_report.exploits)))
+        table.add_row("Unpatched Exploits", str(rt_report.unpatched_exploit_count))
+        table.add_row("Tokens Used", str(rt_report.total_tokens))
+        table.add_row("Spend (USD)", f"${rt_report.total_cost_usd:.6f}")
+        if rt_report.budget_exceeded:
+            table.add_row("Budget Status", "EXCEEDED (partial results saved)")
+        console.print(table)
+
+        if rt_report.budget_exceeded:
+            return EXIT_BUDGET_EXCEEDED
+        return EXIT_PASS if rt_report.unpatched_exploit_count == 0 else EXIT_AUDIT_FAIL
+
+    code = asyncio.run(_run_redteam())
+    if code != EXIT_PASS:
+        raise typer.Exit(code=code)
 
 
 @app.command()
