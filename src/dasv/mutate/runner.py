@@ -27,7 +27,7 @@ from dasv.mutate.impossible_bench import (
     summarize_one_off_outcomes,
 )
 from dasv.sandbox.provider import SandboxProvider
-from dasv.verifier.clean_grader import CleanImageGrader, GradingContext
+from dasv.verifier.clean_grader import CleanImageGrader, GradingContext, ensure_container_image
 
 OneOffOracleEvaluator = Callable[[EnvSpec, OneOffMutation], Awaitable[float]]
 
@@ -108,12 +108,22 @@ class MutationSuiteRunner:
                 self._write_report_json(out_dir, report)
             return report
 
+        effective_spec = spec
+        needs_container = bool(anti_patches) or (
+            include_impossible_bench
+            and bool(one_off_muts)
+            and spec.has_oracle
+            and self._one_off_evaluator is None
+        )
+        if self._provider is not None and needs_container:
+            effective_spec = await ensure_container_image(spec, self._provider, run_id)
+
         anti_outcomes: list[AntiPatchOutcome] = []
         if self._provider is not None:
             grader = CleanImageGrader(self._provider, sandbox_config=self._sandbox_config)
             for idx, mut in enumerate(anti_patches):
                 artifact = mut.to_extracted_artifact()
-                outcome = await grader.grade(spec, artifact, f"{run_id}-ap-{idx}")
+                outcome = await grader.grade(effective_spec, artifact, f"{run_id}-ap-{idx}")
                 anti_outcomes.append(
                     AntiPatchOutcome(
                         mutator_id=mut.mutator_id,
@@ -130,7 +140,7 @@ class MutationSuiteRunner:
         one_off_outcomes: list[OneOffOutcome] = []
         if include_impossible_bench and one_off_muts and spec.has_oracle:
             for mut in one_off_muts:
-                oracle_reward = await self._evaluate_one_off(spec, mut, adapter, run_id)
+                oracle_reward = await self._evaluate_one_off(effective_spec, mut, adapter, run_id)
                 if oracle_reward is not None:
                     one_off_outcomes.append(
                         OneOffOutcome(

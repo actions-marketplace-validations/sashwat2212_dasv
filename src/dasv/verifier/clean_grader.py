@@ -72,34 +72,53 @@ def resolve_verifier_command(
     mount_path: str = VERIFIER_MOUNT_PATH,
 ) -> list[str]:
     """Determine the verifier entrypoint command executed inside Verification Plane."""
+    explicit_paths: list[str] = []
     harbor_cfg = spec.metadata.get("harbor_config")
     if isinstance(harbor_cfg, dict):
         verifier_tbl = cast(dict[str, Any], harbor_cfg).get("verifier")
         if isinstance(verifier_tbl, dict):
-            cmd = cast(dict[str, Any], verifier_tbl).get("command")
+            v_dict = cast(dict[str, Any], verifier_tbl)
+            cmd = v_dict.get("command")
             if isinstance(cmd, list) and cmd:
                 cmd_items = cast(list[Any], cmd)
                 if all(isinstance(x, str) for x in cmd_items):
                     return [str(x) for x in cmd_items]
             if isinstance(cmd, str) and cmd.strip():
                 return ["sh", "-c", cmd.strip()]
+            for key in ("test_path", "entrypoint"):
+                val = v_dict.get(key)
+                if isinstance(val, str) and val.strip():
+                    explicit_paths.append(val.strip())
+
+    def _cmd_for_candidate(raw_vp: str, resolved_verifier_dir: Path) -> list[str] | None:
+        cleaned = raw_vp.strip().lstrip("./").lstrip("/")
+        if not cleaned or ".." in Path(cleaned).parts:
+            return None
+        full = (spec.root_path / cleaned).resolve()
+        if not full.is_file():
+            return None
+        try:
+            rel = full.relative_to(resolved_verifier_dir).as_posix()
+        except ValueError:
+            return None
+        if rel.endswith(".sh"):
+            return ["sh", f"{mount_path}/{rel}"]
+        if rel.endswith(".py"):
+            return ["pytest", f"{mount_path}/{rel}"]
+        return None
 
     if host_verifier_dir is not None:
-        if (host_verifier_dir / "test.sh").is_file():
+        resolved_dir = host_verifier_dir.resolve()
+        for raw_vp in explicit_paths:
+            matched = _cmd_for_candidate(raw_vp, resolved_dir)
+            if matched is not None:
+                return matched
+        if (resolved_dir / "test.sh").is_file():
             return ["sh", f"{mount_path}/test.sh"]
         for raw_vp in spec.verifier_paths:
-            cleaned = raw_vp.strip().lstrip("./").lstrip("/")
-            if not cleaned:
-                continue
-            full = (spec.root_path / cleaned).resolve()
-            try:
-                rel = full.relative_to(host_verifier_dir.resolve()).as_posix()
-            except ValueError:
-                continue
-            if rel.endswith(".sh"):
-                return ["sh", f"{mount_path}/{rel}"]
-            if rel.endswith(".py"):
-                return ["pytest", f"{mount_path}/{rel}"]
+            matched = _cmd_for_candidate(raw_vp, resolved_dir)
+            if matched is not None:
+                return matched
         return ["pytest", mount_path]
 
     return ["pytest", mount_path]
@@ -138,6 +157,84 @@ def _resolve_container_image(spec: EnvSpec) -> str:
             "cannot launch clean-image container."
         )
     return image.strip()
+
+
+def find_env_dockerfile(spec: EnvSpec) -> Path | None:
+    """Locate a buildable Dockerfile under `spec.root_path` (`environment/Dockerfile` first)."""
+    for candidate in (
+        spec.root_path / "environment" / "Dockerfile",
+        spec.root_path / "Dockerfile",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _resolve_build_context(spec: EnvSpec, dockerfile: Path) -> Path:
+    """Choose Docker build context (`environment/` if it holds context files, else repo root)."""
+    parent = dockerfile.parent
+    if parent == spec.root_path:
+        return parent
+    siblings = [p for p in parent.iterdir() if p.name != dockerfile.name]
+    if siblings:
+        return parent
+    return spec.root_path
+
+
+async def ensure_container_image(
+    spec: EnvSpec,
+    provider: SandboxProvider,
+    run_id: str,
+    *,
+    oci_digests: dict[str, str] | None = None,
+    force_build: bool = False,
+) -> EnvSpec:
+    """Build `spec`'s Dockerfile when needed so containers contain the real task workspace.
+
+    Skips building if `spec` declares an explicit prebuilt image (or has already been built),
+    unless `force_build=True`.
+    """
+    if not force_build and spec.metadata.get("dasv_built_image"):
+        if oci_digests is not None and spec.image_ref and spec.image_digest:
+            oci_digests[spec.image_ref] = spec.image_digest
+        return spec
+
+    dockerfile = find_env_dockerfile(spec)
+    needs_build = force_build or (
+        dockerfile is not None
+        and (
+            (not spec.image_ref and not spec.image_digest)
+            or spec.metadata.get("image_explicit") is False
+        )
+    )
+    if not needs_build:
+        if spec.image_ref or spec.image_digest:
+            if oci_digests is not None and spec.image_ref and spec.image_digest:
+                oci_digests[spec.image_ref] = spec.image_digest
+            return spec
+        raise RuntimeSandboxError(
+            f"EnvSpec '{spec.task_id}' declares neither image_ref/image_digest nor a "
+            "buildable Dockerfile; cannot execute container checks."
+        )
+
+    assert dockerfile is not None
+    safe_task = re.sub(r"[^a-z0-9._-]+", "-", spec.task_id.lower()).strip(".-") or "env"
+    safe_run = re.sub(r"[^a-z0-9._-]+", "-", run_id.lower()).strip(".-") or "run"
+    tag = f"dasv-{safe_task}:{safe_run}"
+    context_dir = _resolve_build_context(spec, dockerfile)
+    built_digest = await provider.build_image(context_dir, dockerfile, tag, platform=None)
+    if oci_digests is not None:
+        oci_digests[tag] = built_digest
+    new_meta = dict(spec.metadata)
+    new_meta["dasv_built_image"] = tag
+    new_meta["image_explicit"] = True
+    return spec.model_copy(
+        update={
+            "image_ref": tag,
+            "image_digest": built_digest,
+            "metadata": new_meta,
+        }
+    )
 
 
 class CleanImageGrader:
@@ -199,15 +296,62 @@ class CleanImageGrader:
                 return True, ""
             patch_b64 = base64.b64encode(artifact.patch_bytes).decode("ascii")
             apply_script = (
-                "import base64, os, subprocess, sys, tempfile; "
-                f"data = base64.b64decode({patch_b64!r}); "
-                "fd, p = tempfile.mkstemp(prefix='dasv_patch_', suffix='.diff', dir='/tmp'); "
-                "os.write(fd, data); os.close(fd); "
-                "res = subprocess.run(['git', 'apply', '--whitespace=nowarn', p], "
-                "capture_output=True, text=True); "
-                "os.unlink(p); "
-                "sys.stderr.write(res.stderr); "
-                "sys.exit(res.returncode)"
+                "import base64, os, re, shutil, subprocess, sys, tempfile\n"
+                f"data = base64.b64decode({patch_b64!r})\n"
+                "if shutil.which('git'):\n"
+                "    fd, p = tempfile.mkstemp(prefix='dasv_patch_', suffix='.diff', dir='/tmp')\n"
+                "    os.write(fd, data); os.close(fd)\n"
+                "    res = subprocess.run(['git', 'apply', '--whitespace=nowarn', p], "
+                "capture_output=True, text=True)\n"
+                "    os.unlink(p)\n"
+                "    sys.stderr.write(res.stderr)\n"
+                "    sys.exit(res.returncode)\n"
+                "# Pure-Python unified diff fallback when image lacks `git` binary.\n"
+                "text = data.decode('utf-8', errors='replace')\n"
+                "lines = text.splitlines(keepends=True)\n"
+                "i = 0; n = len(lines)\n"
+                "hunk_re = re.compile(r'^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@')\n"
+                "while i < n:\n"
+                "    if lines[i].startswith('--- '):\n"
+                "        old_p = lines[i][4:].strip().split('\\t')[0].strip('\"')\n"
+                "        i += 1\n"
+                "        if i >= n or not lines[i].startswith('+++ '):\n"
+                "            continue\n"
+                "        new_p = lines[i][4:].strip().split('\\t')[0].strip('\"')\n"
+                "        i += 1\n"
+                "        target = new_p[2:] if new_p.startswith('b/') else new_p\n"
+                "        if target == '/dev/null':\n"
+                "            del_p = old_p[2:] if old_p.startswith('a/') else old_p\n"
+                "            if os.path.exists(del_p):\n"
+                "                os.unlink(del_p)\n"
+                "            continue\n"
+                "        orig = open(target, 'r', encoding='utf-8').splitlines(keepends=True) "
+                "if os.path.exists(target) else []\n"
+                "        out = []; cur = 0\n"
+                "        while i < n and not lines[i].startswith(('diff --git ', '--- ')):\n"
+                "            m = hunk_re.match(lines[i])\n"
+                "            if not m:\n"
+                "                i += 1; continue\n"
+                "            start = max(0, int(m.group(1)) - 1)\n"
+                "            out.extend(orig[cur:start])\n"
+                "            cur = start; i += 1\n"
+                "            stops = ('@@ ', 'diff --git ', '--- ')\n"
+                "            while i < n and not lines[i].startswith(stops):\n"
+                "                hl = lines[i]; i += 1\n"
+                "                if hl.startswith(' '):\n"
+                "                    out.append(hl[1:]); cur += 1\n"
+                "                elif hl.startswith('-'):\n"
+                "                    cur += 1\n"
+                "                elif hl.startswith('+'):\n"
+                "                    out.append(hl[1:])\n"
+                "        out.extend(orig[cur:])\n"
+                "        parent = os.path.dirname(target)\n"
+                "        if parent:\n"
+                "            os.makedirs(parent, exist_ok=True)\n"
+                "        with open(target, 'w', encoding='utf-8') as fh:\n"
+                "            fh.writelines(out)\n"
+                "    else:\n"
+                "        i += 1\n"
             )
             res = await self._provider.exec(
                 handle,
@@ -228,8 +372,8 @@ class CleanImageGrader:
             if not encoded_files:
                 return True, ""
             write_script = (
-                "import base64, json, os; "
-                f"payload = json.loads({json.dumps(json.dumps(encoded_files))}); "
+                "import base64, json, os\n"
+                f"payload = json.loads({json.dumps(json.dumps(encoded_files))})\n"
                 "for rel, b64 in payload.items():\n"
                 "    parent = os.path.dirname(rel)\n"
                 "    if parent:\n"

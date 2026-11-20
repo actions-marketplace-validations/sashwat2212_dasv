@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import json
@@ -27,6 +28,8 @@ from dasv.verifier import (
     filter_git_patch,
     is_protected_verifier_path,
     parse_verifier_reward,
+    resolve_verifier_command,
+    resolve_verifier_host_dir,
 )
 from tests.conftest import FakeSandboxProvider
 
@@ -389,3 +392,84 @@ def test_filter_git_patch_handles_quoted_paths_and_renames() -> None:
     assert b"src/ok.py" in sanitized
     assert b"my test.py" not in sanitized
     assert rejected == ["tests/my test.py"]
+
+
+def test_resolve_verifier_command_prefers_existing_explicit_test_path(tmp_path: Path) -> None:
+    """Regression: skip missing tests/test.sh and honor existing [verifier].test_path."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_calc.py").write_text("assert True\n", encoding="utf-8")
+
+    spec = EnvSpec(
+        task_id="py-verifier-task",
+        standard=EnvStandard.HARBOR,
+        root_path=tmp_path,
+        instruction_text="Implement calculator.",
+        verifier_paths=["tests/", "tests/test.sh", "tests/test_calc.py"],
+        metadata={"harbor_config": {"verifier": {"test_path": "tests/test_calc.py"}}},
+    )
+    host_dir = resolve_verifier_host_dir(spec)
+    assert host_dir == tests_dir
+    assert resolve_verifier_command(spec, host_dir) == [
+        "pytest",
+        f"{VERIFIER_MOUNT_PATH}/test_calc.py",
+    ]
+
+    # Even without explicit [verifier].test_path, missing tests/test.sh must not be selected.
+    implicit_spec = spec.model_copy(update={"metadata": {}})
+    assert resolve_verifier_command(implicit_spec, host_dir) == [
+        "pytest",
+        f"{VERIFIER_MOUNT_PATH}/test_calc.py",
+    ]
+
+
+async def test_clean_image_grader_and_extractor_inline_scripts_are_valid_python(
+    hardened_harbor_env: Path,
+) -> None:
+    """Regression: all inline `python3 -c` scripts in Extractor & Grader must parse cleanly."""
+    spec = HarborAdapter().load(hardened_harbor_env)
+    captured_scripts: list[str] = []
+
+    def exec_capture(
+        handle: SandboxHandle, cmd: list[str], timeout_sec: float, workdir: str | None
+    ) -> ExecResult:
+        _ = (handle, timeout_sec, workdir)
+        if len(cmd) >= 3 and cmd[0] == "python3" and cmd[1] == "-c":
+            captured_scripts.append(cmd[2])
+            return ExecResult(exit_code=0, stdout="{}\n", stderr="", duration_ms=1.0)
+        return ExecResult(exit_code=0, stdout="ok\n", stderr="", duration_ms=1.0)
+
+    provider = FakeSandboxProvider(exec_handler=exec_capture)
+    grader = CleanImageGrader(provider)
+    files = {"src/calc.py": b"def add(a, b):\n    return a + b\n"}
+    glob_artifact = ExtractedArtifact(
+        mode="file_globs",
+        files=files,
+        sha256=compute_artifact_sha256("file_globs", None, files),
+    )
+    patch = b"diff --git a/src/calc.py b/src/calc.py\n--- a/src/calc.py\n+++ b/src/calc.py\n"
+    patch_artifact = ExtractedArtifact(
+        mode="git_patch",
+        patch_bytes=patch,
+        files={},
+        sha256=compute_artifact_sha256("git_patch", patch, {}),
+    )
+
+    out_globs = await grader.grade(spec, glob_artifact, run_id="run-globs-syntax")
+    out_patch = await grader.grade(spec, patch_artifact, run_id="run-patch-syntax")
+    assert out_globs.passed is True
+    assert out_patch.passed is True
+
+    fake_handle = SandboxHandle(
+        container_id="exec-syntax",
+        image_digest="python:3.12-slim",
+        resolved_arch="arm64",
+        emulated_arch=False,
+        plane="execution",
+        run_id="run-extract-syntax",
+    )
+    await ArtifactExtractor().extract(provider, fake_handle, spec, mode="file_globs")
+
+    assert len(captured_scripts) == 3
+    for script in captured_scripts:
+        ast.parse(script)

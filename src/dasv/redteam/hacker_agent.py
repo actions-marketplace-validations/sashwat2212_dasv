@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from dasv.core.config import SandboxConfig
+from dasv.core.errors import RuntimeSandboxError
 from dasv.core.schemas import EnvSpec, ExploitTrace
 from dasv.redteam.fencing import fence_untrusted_output
 from dasv.redteam.llm_client import LLMClient, LLMMessage, LLMToolCall, LLMToolSpec
@@ -305,6 +306,11 @@ class HackerAgent:
     ) -> HackerAttemptResult:
         """Execute one bounded adversarial episode and grade via CleanImageGrader."""
         image = (spec.image_ref or spec.image_digest or "").strip()
+        if not image:
+            raise RuntimeSandboxError(
+                f"EnvSpec '{spec.task_id}' declares neither image_ref nor image_digest; "
+                "cannot launch HackerAgent execution container."
+            )
         exec_cfg = ContainerConfig(
             image=image,
             network_mode="none",

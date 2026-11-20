@@ -49,6 +49,11 @@ def _stderr_is_only_not_found(stderr: str) -> bool:
     return bool(lines) and all("no such container" in line for line in lines)
 
 
+def _matches_run_id(candidate: str, run_id: str) -> bool:
+    """Return True if `candidate` equals `run_id` or is a scoped child (`<run_id>-...`)."""
+    return candidate == run_id or candidate.startswith(f"{run_id}-")
+
+
 class ReapReport(BaseModel):
     """Summary of containers reaped during teardown for a given run_id."""
 
@@ -102,9 +107,13 @@ class ContainerJanitor:
                 self._handles_by_id.pop(existing, None)
 
     def tracked_ids(self, run_id: str | None = None) -> set[str]:
-        """Return currently tracked container IDs (optionally scoped to `run_id`)."""
+        """Return currently tracked container IDs (matching `run_id` and its child scopes)."""
         if run_id is not None:
-            return set(self._tracked_by_run.get(run_id, set()))
+            matched: set[str] = set()
+            for key, ids in self._tracked_by_run.items():
+                if _matches_run_id(key, run_id):
+                    matched.update(ids)
+            return matched
         merged: set[str] = set()
         for ids in self._tracked_by_run.values():
             merged.update(ids)
@@ -142,25 +151,65 @@ class ContainerJanitor:
         )
 
     async def list_labeled_containers(self, run_id: str, *, timeout_sec: float = 5.0) -> list[str]:
-        """Query `docker ps -aq --filter label=dasv.run_id=<run_id> --no-trunc`."""
+        """Query containers matching exact `dasv.run_id=<run_id>` and scoped `<run_id>-*` kids."""
         if not run_id.strip():
             return []
-        res = await self._run_docker_cmd(
-            ["ps", "-aq", "--filter", f"label=dasv.run_id={run_id}", "--no-trunc"],
+        matched: list[str] = []
+
+        # 1. Exact run_id label query (preserves strict SDD-01 filter contract & unit mocks).
+        exact_res = await self._run_docker_cmd(
+            [
+                "ps",
+                "-aq",
+                "--filter",
+                f"label=dasv.run_id={run_id}",
+                "--no-trunc",
+            ],
             timeout_sec=timeout_sec,
         )
-        if res is None:
+        if exact_res is None:
             return []
-        rc, stdout, _stderr = res
-        if rc != 0:
-            return []
-        return _dedupe_container_ids(stdout.splitlines())
+        rc, stdout, _stderr = exact_res
+        if rc == 0:
+            for raw_line in stdout.splitlines():
+                cid = raw_line.strip()
+                if cid:
+                    matched.append(cid)
+
+        # 2. Scoped child run_id query (catches `<run_id>-h1`, `<run_id>-gsg-*`, `<run_id>-t2`).
+        managed_res = await self._run_docker_cmd(
+            [
+                "ps",
+                "-a",
+                "--filter",
+                "label=dasv.managed=true",
+                "--format",
+                '{{.ID}}|{{.Label "dasv.run_id"}}',
+                "--no-trunc",
+            ],
+            timeout_sec=timeout_sec,
+        )
+        if managed_res is not None:
+            m_rc, m_stdout, _m_stderr = managed_res
+            if m_rc == 0:
+                for raw_line in m_stdout.splitlines():
+                    line = raw_line.strip()
+                    if "|" not in line:
+                        continue
+                    cid_part, label_part = line.split("|", 1)
+                    if _matches_run_id(label_part.strip(), run_id) and cid_part.strip():
+                        matched.append(cid_part.strip())
+
+        return _dedupe_container_ids(matched)
 
     async def reap_all(self, run_id: str, *, grace_timeout_sec: float = 10.0) -> ReapReport:
-        """Force-remove every tracked or labeled container for `run_id` and verify zero orphans."""
+        """Force-remove every tracked or labeled container for `run_id` (including child scopes)."""
         if not run_id.strip():
             return ReapReport(run_id=run_id)
-        tracked = set(self._tracked_by_run.get(run_id, set()))
+        matched_keys = [k for k in self._tracked_by_run if _matches_run_id(k, run_id)]
+        tracked: set[str] = set()
+        for key in matched_keys:
+            tracked.update(self._tracked_by_run.get(key, set()))
         docker_labeled = set(
             await self.list_labeled_containers(run_id, timeout_sec=min(5.0, grace_timeout_sec))
         )
@@ -168,7 +217,8 @@ class ContainerJanitor:
 
         report = ReapReport(run_id=run_id, discovered_ids=all_ids)
         if not all_ids:
-            self._tracked_by_run.pop(run_id, None)
+            for key in matched_keys:
+                self._tracked_by_run.pop(key, None)
             return report
 
         removed: set[str] = set()
@@ -257,8 +307,11 @@ class ContainerJanitor:
             self.unregister(cid)
 
         if not unremoved:
-            self._tracked_by_run.pop(run_id, None)
+            for key in matched_keys:
+                self._tracked_by_run.pop(key, None)
         else:
+            for key in matched_keys:
+                self._tracked_by_run.pop(key, None)
             self._tracked_by_run[run_id] = set(unremoved)
             for cid in unremoved:
                 logger.error("RUNTIME_ERROR: stubborn container survived reap_all: %s", cid)

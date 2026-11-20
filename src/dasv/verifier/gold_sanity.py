@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import posixpath
 import re
 import shutil
@@ -18,7 +19,7 @@ from dasv.core.config import SandboxConfig
 from dasv.core.schemas import EnvSpec
 from dasv.sandbox.provider import SandboxProvider
 from dasv.verifier.artifact_extractor import ExtractedArtifact
-from dasv.verifier.clean_grader import CleanImageGrader, GradingContext
+from dasv.verifier.clean_grader import CleanImageGrader, GradingContext, ensure_container_image
 from dasv.verifier.determinism import DeterminismRunner
 
 _DIFF_HEADER_RE = re.compile(r"^(?:---|\+\+\+)\s+(?:[ab]/)?(.+?)(?:\t.*)?$")
@@ -99,10 +100,14 @@ def apply_unified_diff_to_dir(target_dir: Path, diff_text: str) -> tuple[bool, s
 
     resolved_root = target_dir.resolve()
     payload = diff_text if diff_text.endswith("\n") else diff_text + "\n"
+    env = dict(os.environ)
+    # Prevent git from walking up into a parent monorepo .git and resolving paths outside cwd.
+    env["GIT_CEILING_DIRECTORIES"] = str(resolved_root.parent)
     proc = subprocess.run(
         ["git", "apply", "--whitespace=nowarn", "-"],
         input=payload.encode("utf-8"),
         cwd=str(resolved_root),
+        env=env,
         capture_output=True,
         timeout=15,
         check=False,
@@ -139,7 +144,7 @@ class GoldSanityGate:
     ) -> GoldSanityResult:
         """Apply `candidate_diff` to a clean temp copy of `spec` and verify all 3 invariants."""
         try:
-            validate_safe_unified_diff(candidate_diff)
+            touched_paths = validate_safe_unified_diff(candidate_diff)
         except ValueError as exc:
             return GoldSanityResult(
                 status="rejected_fix",
@@ -164,14 +169,28 @@ class GoldSanityGate:
                 )
 
             patched_spec = adapter.load(patched_root)
-            # Preserve container image digest/ref if original spec had resolved digest metadata.
-            updates: dict[str, object] = {}
-            if not patched_spec.image_ref and spec.image_ref:
-                updates["image_ref"] = spec.image_ref
-            if not patched_spec.image_digest and spec.image_digest:
-                updates["image_digest"] = spec.image_digest
-            if updates:
-                patched_spec = patched_spec.model_copy(update=updates)
+            touched_dockerfile = any(Path(p).name.startswith("Dockerfile") for p in touched_paths)
+            if touched_dockerfile:
+                patched_spec = await ensure_container_image(
+                    patched_spec,
+                    self._provider,
+                    f"{run_id}-img",
+                    force_build=True,
+                )
+            else:
+                # Preserve already-built or resolved container image from original spec.
+                updates: dict[str, object] = {}
+                if spec.image_ref:
+                    updates["image_ref"] = spec.image_ref
+                if spec.image_digest:
+                    updates["image_digest"] = spec.image_digest
+                if spec.metadata.get("dasv_built_image"):
+                    merged_meta = dict(patched_spec.metadata)
+                    merged_meta["dasv_built_image"] = spec.metadata["dasv_built_image"]
+                    merged_meta["image_explicit"] = True
+                    updates["metadata"] = merged_meta
+                if updates:
+                    patched_spec = patched_spec.model_copy(update=updates)
 
             grader = CleanImageGrader(self._provider, sandbox_config=self._sandbox_config)
 

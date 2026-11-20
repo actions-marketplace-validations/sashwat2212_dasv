@@ -286,7 +286,7 @@ class UnifiedLLMClient:
                         parsed.usage.completion_tokens,
                     )
                     return parsed
-        except Exception:
+        except BaseException:
             await self._budget.release(reservation)
             raise
 

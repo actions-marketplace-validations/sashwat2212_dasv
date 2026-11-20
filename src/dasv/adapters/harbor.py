@@ -90,9 +90,12 @@ class HarborAdapter:
         if not dockerfile.is_file():
             dockerfile = path / "Dockerfile"
 
-        image_ref: str | None = (
-            str(env_tbl["image"]) if isinstance(env_tbl.get("image"), str) else None
+        explicit_image = (
+            str(env_tbl["image"]).strip()
+            if isinstance(env_tbl.get("image"), str) and env_tbl["image"].strip()
+            else None
         )
+        image_ref: str | None = explicit_image
         if image_ref is None:
             image_ref = _extract_first_from_image(dockerfile)
 
@@ -100,10 +103,16 @@ class HarborAdapter:
         if image_ref and "@sha256:" in image_ref:
             image_digest = "sha256:" + image_ref.split("@sha256:", 1)[1]
 
+        dockerfile_rel: str | None = None
+        if dockerfile.is_file():
+            dockerfile_rel = dockerfile.relative_to(path).as_posix()
+
         spec_metadata: dict[str, Any] = {
             "harbor_config": raw,
             "network_mode": env_tbl.get("network_mode"),
             "base_commit": metadata_tbl.get("base_commit") or env_tbl.get("base_commit"),
+            "image_explicit": explicit_image is not None,
+            "dockerfile_path": dockerfile_rel,
         }
 
         return EnvSpec(

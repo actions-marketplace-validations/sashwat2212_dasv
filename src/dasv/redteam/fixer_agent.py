@@ -11,15 +11,23 @@ from dasv.redteam.fencing import fence_untrusted_output
 from dasv.redteam.llm_client import LLMClient, LLMMessage
 from dasv.verifier.gold_sanity import validate_safe_unified_diff
 
-_FENCED_DIFF_RE = re.compile(r"```(?:diff|patch)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_EXPLICIT_DIFF_FENCE_RE = re.compile(r"```(?:diff|patch)\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_ANY_FENCE_RE = re.compile(r"```[a-zA-Z0-9_-]*\s*\n(.*?)```", re.DOTALL)
 
 
 def extract_unified_diff(text: str) -> str | None:
     """Extract a unified diff from raw LLM response text (fenced code block or raw diff)."""
-    match = _FENCED_DIFF_RE.search(text)
-    if match:
-        candidate = match.group(1).strip()
+    explicit = _EXPLICIT_DIFF_FENCE_RE.search(text)
+    if explicit:
+        candidate = explicit.group(1).strip()
         if candidate:
+            return candidate + "\n"
+
+    for match in _ANY_FENCE_RE.finditer(text):
+        candidate = match.group(1).strip()
+        if candidate and (
+            "@@ " in candidate or "diff --git " in candidate or candidate.startswith("--- ")
+        ):
             return candidate + "\n"
 
     lines = text.splitlines()

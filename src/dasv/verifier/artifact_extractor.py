@@ -250,12 +250,31 @@ class ArtifactExtractor:
         workdir: str | None,
         timeout_sec: float,
     ) -> ExtractedArtifact:
+        # Mark newly created untracked files intent-to-add so `git diff HEAD` captures them too.
+        await provider.exec(
+            handle,
+            ["git", "add", "-N", "--", "."],
+            timeout_sec=timeout_sec,
+            workdir=workdir,
+        )
         result = await provider.exec(
             handle,
             ["git", "diff", "--binary", "HEAD"],
             timeout_sec=timeout_sec,
             workdir=workdir,
         )
+        if result.exit_code != 0:
+            # Minimal images (e.g. python:3.12-slim) or .git-stripped workspaces lack git/HEAD;
+            # fall back cleanly to scoped workspace file extraction with verifier-path filtering.
+            return await self._extract_file_globs(
+                provider,
+                handle,
+                spec,
+                mode="file_globs",
+                globs=(),
+                workdir=workdir,
+                timeout_sec=timeout_sec,
+            )
         raw_patch = result.stdout.encode("utf-8", errors="surrogateescape")
         sanitized, rejected = filter_git_patch(raw_patch, spec.verifier_paths)
         digest = compute_artifact_sha256("git_patch", sanitized, {})
@@ -279,16 +298,28 @@ class ArtifactExtractor:
         timeout_sec: float,
     ) -> ExtractedArtifact:
         patterns = list(globs) or ["**/*"]
+        skip_dirs = sorted(
+            {".git", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "node_modules"}
+        )
         script = (
-            "import base64, glob, json, os; "
-            f"patterns = {json.dumps(patterns)}; "
-            "out = {}; "
+            "import base64, glob, json, os\n"
+            f"patterns = {json.dumps(patterns)}\n"
+            f"skip_dirs = set({json.dumps(skip_dirs)})\n"
+            "out = {}\n"
             "for pat in patterns:\n"
             "    for p in sorted(glob.glob(pat, recursive=True)):\n"
+            "        parts = set(p.replace('\\\\', '/').split('/'))\n"
+            "        if parts & skip_dirs:\n"
+            "            continue\n"
             "        if os.path.isfile(p) and not os.path.islink(p):\n"
-            "            with open(p, 'rb') as fh:\n"
-            "                out[p] = base64.b64encode(fh.read()).decode('ascii')\n"
-            "print(json.dumps(out))"
+            "            try:\n"
+            "                if os.path.getsize(p) > 2 * 1024 * 1024:\n"
+            "                    continue\n"
+            "                with open(p, 'rb') as fh:\n"
+            "                    out[p] = base64.b64encode(fh.read()).decode('ascii')\n"
+            "            except OSError:\n"
+            "                continue\n"
+            "print(json.dumps(out))\n"
         )
         result = await provider.exec(
             handle,
