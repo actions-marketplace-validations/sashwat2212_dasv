@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 import typer
 from rich.console import Console
@@ -25,14 +26,22 @@ from dasv.core.errors import (
     EXIT_NATIVE_ERROR,
     EXIT_PASS,
     EXIT_RUNTIME_ERROR,
+    BudgetExceededError,
     DasvError,
 )
 from dasv.core.orchestrator import AuditContext, TieredAuditOrchestrator
 from dasv.core.schemas import (
     AuditReport,
+    CurriculumBucket,
     Severity,
 )
 from dasv.mutate import MutationSuiteRunner
+from dasv.profile import (
+    SignalProfiler,
+    build_tier3_profile_hook,
+    discover_taskset_specs,
+    load_rewards_from_traces_jsonl,
+)
 from dasv.redteam import (
     RedTeamRunner,
     UnifiedLLMClient,
@@ -42,6 +51,7 @@ from dasv.redteam import (
 from dasv.reporting.html_renderer import write_html_report
 from dasv.reporting.json_writer import write_report_json
 from dasv.reporting.sarif_writer import write_sarif
+from dasv.rubric import LLMRubricJudgeScorer, ProRubricAuditor, RubricJudgeScorer
 from dasv.sandbox.docker_provider import DockerSandboxProvider
 from dasv.sandbox.janitor import ContainerJanitor
 
@@ -302,13 +312,36 @@ def audit(
         bool,
         typer.Option("--propose-fix", help="Run Fixer + GoldSanityGate on Tier 2 exploits."),
     ] = False,
+    hack_classes: Annotated[
+        str | None,
+        typer.Option(
+            "--hack-classes",
+            help="Comma-separated Tier 2 hack classes (default: all 6 SDD-02 strategies).",
+        ),
+    ] = None,
+    gold_sanity_replays: Annotated[
+        int,
+        typer.Option("--gold-sanity-replays", min=1, help="Oracle replays in GoldSanityGate."),
+    ] = 5,
+    profile_model: Annotated[
+        str | None,
+        typer.Option("--profile-model", help="Override Tier 3 base policy model ID."),
+    ] = None,
+    rollouts: Annotated[
+        int,
+        typer.Option("--rollouts", min=1, help="Tier 3 rollouts G per task."),
+    ] = 8,
+    traces: Annotated[
+        Path | None,
+        typer.Option("--traces", help="Optional TrainingTrace JSONL for $0 Tier 3 profiling."),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Optional path to dasv.toml."),
     ] = None,
     seed: Annotated[int, typer.Option("--seed", help="Deterministic RNG seed.")] = 42,
 ) -> None:
-    """Run the tiered audit pipeline (Tier 0 static -> Tier 1 determinism -> Tier 2 red-team)."""
+    """Run the tiered audit pipeline (Tier 0 -> Tier 1 -> Tier 2 red-team -> Tier 3 signal)."""
     try:
         cfg = load_config(config_path)
         if max_cost_usd is not None or max_tokens is not None:
@@ -318,10 +351,23 @@ def audit(
             if max_tokens is not None:
                 budget_updates["max_tokens"] = max_tokens
             cfg = cfg.model_copy(update={"budget": cfg.budget.model_copy(update=budget_updates)})
+        if base_url is not None or redteam_model is not None or profile_model is not None:
+            llm_updates: dict[str, object] = {}
+            if base_url is not None:
+                llm_updates["base_url"] = base_url
+            if redteam_model is not None:
+                llm_updates["attacker_model"] = redteam_model
+                llm_updates["fixer_model"] = redteam_model
+            elif profile_model is not None:
+                llm_updates["attacker_model"] = profile_model
+            cfg = cfg.model_copy(update={"llm": cfg.llm.model_copy(update=llm_updates)})
         parsed_tiers: set[int] = (
             _parse_tiers(tiers)
             if tiers is not None
             else {int(t) for t in cfg.project.default_tiers}
+        )
+        selected_hack_classes = (
+            parse_hack_classes(hack_classes) if (2 in parsed_tiers or hack_classes) else None
         )
         threshold = _parse_severity(fail_on or cfg.project.fail_on)
         registry = AdapterRegistry()
@@ -351,12 +397,27 @@ def audit(
             fixer_model=redteam_model,
             base_url=base_url,
             api_key_env=api_key_env,
+            hack_classes=selected_hack_classes
+            if selected_hack_classes is not None
+            else parse_hack_classes(None),
             propose_fix=propose_fix,
+            gold_sanity_replays=gold_sanity_replays,
         )
         if 2 in parsed_tiers
         else None
     )
-    orchestrator = TieredAuditOrchestrator(tier2_hook=tier2_hook)
+    tier3_hook = (
+        build_tier3_profile_hook(
+            base_model=profile_model or redteam_model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            rollouts_g=rollouts,
+            traces_path=traces,
+        )
+        if 3 in parsed_tiers
+        else None
+    )
+    orchestrator = TieredAuditOrchestrator(tier2_hook=tier2_hook, tier3_hook=tier3_hook)
     result = asyncio.run(
         orchestrator.execute(
             ctx,
@@ -405,6 +466,24 @@ def audit(
         )
     if rep.mutation_survival_rate is not None:
         summary.add_row("Mutation Survival Rate", f"{rep.mutation_survival_rate * 100.0:.1f}%")
+    if rep.exploits or 2 in parsed_tiers:
+        unpatched = sum(1 for e in rep.exploits if e.gold_sanity_status != "verified_fix")
+        summary.add_row(
+            "Confirmed Exploits",
+            f"{len(rep.exploits)} ({unpatched} unpatched)",
+        )
+    if rep.signal_profile is not None:
+        sp = rep.signal_profile
+        summary.add_row(
+            "RLVR Signal Bucket",
+            (
+                f"{sp.bucket.value} "
+                f"(pass@1={sp.pass_at_1 * 100.0:.1f}%, var={sp.advantage_variance:.4f})"
+            ),
+        )
+    if rep.manifest.total_tokens > 0 or rep.manifest.total_cost_usd > 0.0:
+        summary.add_row("Tokens Used", str(rep.manifest.total_tokens))
+        summary.add_row("Spend (USD)", f"${rep.manifest.total_cost_usd:.6f}")
     console.print(summary)
 
     if rep.findings:
@@ -468,15 +547,6 @@ def report(
         )
 
 
-def _stage6_stub(command_name: str, milestone: str) -> None:
-    typer.echo(
-        f"`dasv {command_name}` is scheduled for Stage 6 ({milestone}). "
-        "Available now: `doctor`, `inspect`, `audit`, `mutate`, `redteam`, `report`.",
-        err=True,
-    )
-    raise typer.Exit(code=EXIT_CONFIG_ERROR)
-
-
 @app.command()
 def mutate(
     path: Annotated[Path, typer.Argument(help="Path to RL environment directory.")],
@@ -523,7 +593,7 @@ def mutate(
 
     async def _run_mutations() -> int:
         janitor = ContainerJanitor()
-        run_id = "dasv-mutate"
+        run_id = f"dasv-mutate-{uuid4().hex[:10]}"
         provider: DockerSandboxProvider | None = None
         if not dry_run:
             provider = DockerSandboxProvider(janitor=janitor)
@@ -666,7 +736,7 @@ def redteam(
 
     async def _run_redteam() -> int:
         janitor = ContainerJanitor()
-        run_id = "dasv-redteam"
+        run_id = f"dasv-redteam-{uuid4().hex[:10]}"
         provider = DockerSandboxProvider(janitor=janitor)
         health = await provider.health_check()
         if not health.healthy:
@@ -735,31 +805,373 @@ def redteam(
         raise typer.Exit(code=code)
 
 
+def _parse_curriculum_buckets(raw: str | None) -> list[CurriculumBucket]:
+    if raw is None or not raw.strip():
+        return [CurriculumBucket.GOLDILOCKS]
+    selected: list[CurriculumBucket] = []
+    for part in raw.split(","):
+        cleaned = part.strip().lower()
+        if not cleaned:
+            continue
+        try:
+            bucket = CurriculumBucket(cleaned)
+        except ValueError as exc:
+            valid = ", ".join(b.value for b in CurriculumBucket)
+            raise DasvError(
+                f"Invalid curriculum bucket '{cleaned}'. Valid values: {valid}.",
+                exit_code=EXIT_CONFIG_ERROR,
+            ) from exc
+        if bucket not in selected:
+            selected.append(bucket)
+    if not selected:
+        raise DasvError("At least one curriculum bucket must be specified.", exit_code=2)
+    return selected
+
+
 @app.command()
 def rubric(
-    path: Annotated[Path, typer.Argument(help="Path to rubric-based RL environment.")],
-    max_cost_usd: Annotated[float, typer.Option("--max-cost-usd", help="Hard USD cap.")] = 1.00,
+    path: Annotated[
+        Path, typer.Argument(help="Path to rubric-based RL environment directory or rubric file.")
+    ],
+    env_format: Annotated[
+        str | None,
+        typer.Option("--format", help="Force adapter format (harbor, openenv, verifiers_v1, hud)."),
+    ] = None,
+    run_perturbations: Annotated[
+        bool,
+        typer.Option(
+            "--run-perturbations/--static-only",
+            help="Run 3 deterministic verbosity/fluff perturbations against a judge model.",
+        ),
+    ] = False,
+    baseline_response: Annotated[
+        str | None,
+        typer.Option(
+            "--baseline-response",
+            help="Known-wrong or partial baseline response used for RULE-RUBR-002 perturbations.",
+        ),
+    ] = None,
+    inflation_threshold: Annotated[
+        float,
+        typer.Option(
+            "--inflation-threshold",
+            min=0.0,
+            max=1.0,
+            help="Minimum score inflation delta triggering RULE-RUBR-002 (default: 0.15).",
+        ),
+    ] = 0.15,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Judge model ID for dynamic verbosity perturbations."),
+    ] = None,
+    base_url: Annotated[
+        str | None,
+        typer.Option("--base-url", help="OpenAI-compatible inference base URL for judge LLM."),
+    ] = None,
+    api_key_env: Annotated[
+        str,
+        typer.Option("--api-key-env", help="Env var holding cloud API key (never enters sandbox)."),
+    ] = "OPENAI_API_KEY",
+    max_cost_usd: Annotated[
+        float | None,
+        typer.Option("--max-cost-usd", min=0.0, help="Hard USD cap for judge calls."),
+    ] = None,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option("--max-tokens", min=1, help="Hard token cap for judge calls."),
+    ] = None,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option("--out-dir", help="Write rubric_audit.json and prorubric_gate.yaml here."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to dasv.toml."),
+    ] = None,
 ) -> None:
-    """Run ProRubric additive-compensation & CHERRL judge stress tests (Stage 6 M2/M4)."""
-    _ = (path, max_cost_usd)
-    _stage6_stub("rubric", "M2/M4")
+    """Run ProRubric additive-compensation (RULE-RUBR-001) & verbosity/fluff (RULE-RUBR-002)."""
+    if not path.exists():
+        typer.echo(f"Error: Rubric target path not found: '{path}'", err=True)
+        raise typer.Exit(code=EXIT_CONFIG_ERROR)
+
+    try:
+        cfg = load_config(config_path)
+    except DasvError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    spec = None
+    if path.is_dir():
+        try:
+            adapter = AdapterRegistry().resolve(path, forced_format=env_format)
+            spec = adapter.load(path)
+        except DasvError:
+            if env_format is not None:
+                typer.echo(
+                    f"Error: Path '{path}' could not be loaded with --format '{env_format}'.",
+                    err=True,
+                )
+                raise typer.Exit(code=EXIT_CONFIG_ERROR) from None
+
+    effective_base_url = base_url or cfg.llm.base_url
+    effective_model = model or cfg.llm.attacker_model
+    effective_max_cost = max_cost_usd if max_cost_usd is not None else cfg.budget.max_cost_usd
+    effective_max_tokens = max_tokens if max_tokens is not None else cfg.budget.max_tokens
+
+    async def _run_rubric() -> int:
+        auditor = ProRubricAuditor()
+        scorer: RubricJudgeScorer | None = None
+        budget: BudgetGuard | None = None
+        if run_perturbations:
+            budget = BudgetGuard(
+                max_cost_usd=effective_max_cost,
+                max_tokens=effective_max_tokens,
+                base_url=effective_base_url,
+            )
+            llm = UnifiedLLMClient(
+                base_url=effective_base_url,
+                budget=budget,
+                api_key_env=api_key_env,
+            )
+            scorer = LLMRubricJudgeScorer(llm, model=effective_model)
+
+        budget_tripped = False
+        try:
+            rubric_report = await auditor.audit(
+                path,
+                spec=spec,
+                scorer=scorer,
+                baseline_response=baseline_response,
+                inflation_threshold=inflation_threshold,
+                out_dir=out_dir,
+            )
+        except BudgetExceededError as exc:
+            budget_tripped = True
+            typer.echo(f"Error: {exc}", err=True)
+            # Still flush $0 static analysis when budget aborts dynamic judge perturbations.
+            rubric_report = await auditor.audit(path, spec=spec, scorer=None, out_dir=out_dir)
+            rubric_report = rubric_report.model_copy(update={"budget_exceeded": True})
+        except DasvError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            return exc.exit_code
+
+        if budget is not None:
+            snap = await budget.snapshot()
+            rubric_report = rubric_report.model_copy(
+                update={
+                    "total_tokens": snap.committed_tokens,
+                    "total_cost_usd": snap.committed_cost_usd,
+                }
+            )
+            if out_dir is not None:
+                ProRubricAuditor.write_artifacts(out_dir, rubric_report)
+
+        table = Table(title=f"ProRubric Audit: {rubric_report.task_id}")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value")
+        table.add_row("Rubric Definitions Inspected", str(len(rubric_report.targets_inspected)))
+        table.add_row(
+            "Additive Loopholes (RULE-RUBR-001)",
+            str(sum(1 for f in rubric_report.findings if f.rule_id == "RULE-RUBR-001")),
+        )
+        if rubric_report.verbosity_audit is not None:
+            va = rubric_report.verbosity_audit
+            table.add_row("Baseline Wrong Score", f"{va.baseline_score:.2f}")
+            table.add_row("Max Fluff Inflation Delta", f"+{va.max_delta:.2f}")
+            table.add_row(
+                "Verbosity Inflation (RULE-RUBR-002)",
+                "FAIL" if not va.passed else "PASS",
+            )
+        table.add_row("Recommended Gate Specs", str(len(rubric_report.recommended_gate_specs)))
+        if rubric_report.total_tokens > 0 or rubric_report.total_cost_usd > 0.0:
+            table.add_row("Tokens Used", str(rubric_report.total_tokens))
+            table.add_row("Spend (USD)", f"${rubric_report.total_cost_usd:.6f}")
+        console.print(table)
+
+        if budget_tripped or rubric_report.budget_exceeded:
+            return EXIT_BUDGET_EXCEEDED
+        return EXIT_PASS if rubric_report.passed else EXIT_AUDIT_FAIL
+
+    code = asyncio.run(_run_rubric())
+    if code != EXIT_PASS:
+        raise typer.Exit(code=code)
 
 
 @app.command()
 def profile(
-    path: Annotated[Path, typer.Argument(help="Path to RL taskset directory.")],
+    path: Annotated[
+        Path, typer.Argument(help="Path to single RL environment or parent taskset directory.")
+    ],
+    env_format: Annotated[
+        str | None,
+        typer.Option("--format", help="Force adapter format (harbor, openenv, verifiers_v1, hud)."),
+    ] = None,
     base_url: Annotated[
-        str, typer.Option("--base-url", help="OpenAI-compatible base URL.")
-    ] = "http://localhost:11434/v1",
-    model: Annotated[str, typer.Option("--model", help="Base policy model ID.")] = "qwen2.5:3b",
-    rollouts: Annotated[int, typer.Option("--rollouts", help="Rollouts G per task.")] = 8,
+        str | None,
+        typer.Option("--base-url", help="OpenAI-compatible base URL (Ollama/MLX/vLLM/cloud)."),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Base policy model ID (default: dasv.toml attacker_model)."),
+    ] = None,
+    api_key_env: Annotated[
+        str,
+        typer.Option("--api-key-env", help="Env var holding cloud API key (never enters sandbox)."),
+    ] = "OPENAI_API_KEY",
+    rollouts: Annotated[
+        int,
+        typer.Option("--rollouts", min=1, help="Rollouts G per task (default: 8)."),
+    ] = 8,
+    traces: Annotated[
+        Path | None,
+        typer.Option(
+            "--traces",
+            help="Optional TrainingTrace JSONL (`task_id`, `reward`) for $0 offline profiling.",
+        ),
+    ] = None,
+    goldilocks_low: Annotated[
+        float,
+        typer.Option(
+            "--goldilocks-low",
+            min=0.0,
+            max=1.0,
+            help="Lower pass@1 band for GOLDILOCKS.",
+        ),
+    ] = 0.05,
+    goldilocks_high: Annotated[
+        float,
+        typer.Option(
+            "--goldilocks-high",
+            min=0.0,
+            max=1.0,
+            help="Upper pass@1 band for GOLDILOCKS.",
+        ),
+    ] = 0.40,
+    include_buckets: Annotated[
+        str | None,
+        typer.Option(
+            "--include-buckets",
+            help="Comma-separated CurriculumBuckets to export (default: goldilocks).",
+        ),
+    ] = None,
     export_curriculum: Annotated[
-        Path | None, typer.Option("--export-curriculum", help="Output JSONL path.")
+        Path | None,
+        typer.Option(
+            "--export-curriculum",
+            help="Write calibrated curriculum manifest (.jsonl or .yaml).",
+        ),
+    ] = None,
+    max_cost_usd: Annotated[
+        float | None,
+        typer.Option("--max-cost-usd", min=0.0, help="Hard USD budget ceiling."),
+    ] = None,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option("--max-tokens", min=1, help="Hard token budget ceiling."),
+    ] = None,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option("--out-dir", help="Write profile.json artifact to this directory."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to dasv.toml."),
     ] = None,
 ) -> None:
-    """Run Tier 3 pass@k / pass^k & GRPO/DAPO zero-gradient signal profiler (Stage 6 M3)."""
-    _ = (path, base_url, model, rollouts, export_curriculum)
-    _stage6_stub("profile", "M3")
+    """Run Tier 3 pass@1/pass@k/pass^k & GRPO/DAPO zero-gradient signal profiler + export."""
+    try:
+        cfg = load_config(config_path)
+        buckets = _parse_curriculum_buckets(include_buckets)
+        discovered = discover_taskset_specs(path, forced_format=env_format)
+        traces_map = load_rewards_from_traces_jsonl(traces) if traces is not None else None
+    except DasvError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    specs = [spec for _adapter, spec in discovered]
+    effective_base_url = base_url or cfg.llm.base_url
+    effective_model = model or cfg.llm.attacker_model
+    effective_max_cost = max_cost_usd if max_cost_usd is not None else cfg.budget.max_cost_usd
+    effective_max_tokens = max_tokens if max_tokens is not None else cfg.budget.max_tokens
+
+    async def _run_profile() -> int:
+        janitor = ContainerJanitor()
+        run_id = f"dasv-profile-{uuid4().hex[:10]}"
+        provider: DockerSandboxProvider | None = None
+        llm: UnifiedLLMClient | None = None
+        budget = BudgetGuard(
+            max_cost_usd=effective_max_cost,
+            max_tokens=effective_max_tokens,
+            base_url=effective_base_url,
+        )
+
+        if traces_map is None:
+            provider = DockerSandboxProvider(janitor=janitor)
+            health = await provider.health_check()
+            if not health.healthy:
+                typer.echo(
+                    f"Error: Docker runtime unavailable ({health.detail}). "
+                    "Start Docker/OrbStack or pass `--traces <file.jsonl>` for offline profiling.",
+                    err=True,
+                )
+                return EXIT_RUNTIME_ERROR
+            llm = UnifiedLLMClient(
+                base_url=effective_base_url,
+                budget=budget,
+                api_key_env=api_key_env,
+            )
+
+        profiler = SignalProfiler(
+            llm=llm,
+            provider=provider,
+            budget=budget,
+            sandbox_config=cfg.sandbox,
+        )
+        try:
+            prof_report = await profiler.profile_specs(
+                specs,
+                base_model=effective_model,
+                rollouts_g=rollouts,
+                run_id=run_id,
+                goldilocks_low=goldilocks_low,
+                goldilocks_high=goldilocks_high,
+                traces_by_task=traces_map,
+                out_dir=out_dir,
+                export_curriculum_path=export_curriculum,
+                include_buckets=buckets,
+            )
+        except DasvError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            return exc.exit_code
+        finally:
+            if provider is not None:
+                await janitor.reap_all(run_id)
+
+        table = Table(title=f"RLVR Signal Profile ({prof_report.base_model}, G={rollouts})")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value")
+        table.add_row("Tasks Profiled", str(len(prof_report.tasks)))
+        table.add_row("Mean pass@1", f"{prof_report.mean_pass_at_1 * 100.0:.1f}%")
+        table.add_row("Mean Advantage Variance", f"{prof_report.mean_advantage_variance:.4f}")
+        table.add_row("Zero-Grad Compute Waste", f"{prof_report.zero_grad_waste_pct:.1f}%")
+        table.add_row(
+            "Buckets",
+            ", ".join(f"{k}={v}" for k, v in prof_report.bucket_counts.items() if v > 0) or "-",
+        )
+        if export_curriculum is not None:
+            table.add_row("Exported Curriculum", str(export_curriculum))
+        if prof_report.total_tokens > 0 or prof_report.total_cost_usd > 0.0:
+            table.add_row("Tokens Used", str(prof_report.total_tokens))
+            table.add_row("Spend (USD)", f"${prof_report.total_cost_usd:.6f}")
+        console.print(table)
+
+        if prof_report.budget_exceeded:
+            return EXIT_BUDGET_EXCEEDED
+        return EXIT_PASS
+
+    code = asyncio.run(_run_profile())
+    if code != EXIT_PASS:
+        raise typer.Exit(code=code)
 
 
 def main() -> None:

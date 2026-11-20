@@ -339,7 +339,13 @@
           reward={{ "%.2f"|format(ex.reward_obtained) }} &middot;
           status=<strong>{{ ex.gold_sanity_status }}</strong>
         </summary>
+        {% if ex.steps %}
+        <div class="muted" style="margin-top:8px;font-size:12px;">Trajectory ({{ ex.steps | length }} event(s)):</div>
+        <pre>{% for step in ex.steps %}{{ step | tojson }}
+{% endfor %}</pre>
+        {% endif %}
         {% if ex.proposed_fix_diff %}
+        <div class="muted" style="margin-top:8px;font-size:12px;">Proposed Fixer Diff ({{ ex.gold_sanity_status }}):</div>
         <pre>{{ ex.proposed_fix_diff }}</pre>
         {% endif %}
       </details>
@@ -371,6 +377,24 @@
           <div class="kpi-val">{{ "YES" if report.signal_profile.zero_grad_risk else "NO" }}</div>
         </div>
       </div>
+      {% if signal_points %}
+      <div class="chart-wrap">
+        <svg width="{{ signal_svg_width }}" height="148" viewBox="0 0 {{ signal_svg_width }} 148" role="img" aria-label="pass@k vs pass^k signal curve">
+          <text x="12" y="16" fill="#93a4bd" font-size="11" font-family="monospace">pass@k (cyan) vs pass^k (amber)</text>
+          <line x1="12" y1="116" x2="{{ signal_svg_width - 12 }}" y2="116" stroke="#26334a" stroke-width="1"/>
+          {% if signal_points | length > 1 %}
+          <polyline fill="none" stroke="#38bdf8" stroke-width="2.5" points="{{ signal_pak_poly }}"/>
+          <polyline fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="4 3" points="{{ signal_ppk_poly }}"/>
+          {% endif %}
+          {% for pt in signal_points %}
+          <circle cx="{{ pt.x }}" cy="{{ pt.pass_at_k_y }}" r="4" fill="#38bdf8"/>
+          <text x="{{ pt.x }}" y="{{ pt.pass_at_k_y - 8 }}" text-anchor="middle" fill="#7dd3fc" font-size="10" font-family="monospace">{{ pt.pass_at_k_label }}</text>
+          <circle cx="{{ pt.x }}" cy="{{ pt.pass_pow_k_y }}" r="4" fill="#f59e0b"/>
+          <text x="{{ pt.x }}" y="136" text-anchor="middle" fill="#93a4bd" font-size="11" font-family="monospace">k={{ pt.k }}</text>
+          {% endfor %}
+        </svg>
+      </div>
+      {% endif %}
     </section>
     {% endif %}
 

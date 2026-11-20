@@ -44,7 +44,7 @@ from dasv.sandbox.docker_provider import DockerSandboxProvider
 from dasv.sandbox.janitor import ContainerJanitor, ReapReport
 from dasv.sandbox.probes import run_runtime_boundary_probes, run_tier0_static_probes
 from dasv.sandbox.provider import ContainerConfig, SandboxProvider
-from dasv.verifier.clean_grader import CleanImageGrader, GradingContext
+from dasv.verifier.clean_grader import CleanImageGrader, GradingContext, ensure_container_image
 from dasv.verifier.determinism import DeterminismRunner
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,7 @@ class AuditContext:
     noop_replays: int | None = None
     short_circuit: bool = True
     run_mutations: bool = False
+    determinism: DeterminismMetrics | None = None
 
     @classmethod
     def create(
@@ -148,16 +149,6 @@ class OrchestrationResult:
     error_message: str | None = None
 
 
-def _find_dockerfile(spec: EnvSpec) -> Path | None:
-    for candidate in (
-        spec.root_path / "environment" / "Dockerfile",
-        spec.root_path / "Dockerfile",
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 class TieredAuditOrchestrator:
     """Cost-ordered async audit orchestrator with guaranteed cleanup and partial report flush."""
 
@@ -190,28 +181,14 @@ class TieredAuditOrchestrator:
         provider: SandboxProvider,
         oci_digests: dict[str, str],
     ) -> EnvSpec:
-        spec = ctx.env_spec
-        if spec.image_ref or spec.image_digest:
-            if spec.image_ref and spec.image_digest:
-                oci_digests[spec.image_ref] = spec.image_digest
-            return spec
-
-        dockerfile = _find_dockerfile(spec)
-        if dockerfile is None:
-            raise RuntimeSandboxError(
-                f"EnvSpec '{spec.task_id}' declares neither image_ref/image_digest nor a "
-                "buildable Dockerfile; cannot execute Tier 1 container checks."
-            )
-
-        tag = f"dasv-{spec.task_id.lower().replace(' ', '-')}:{ctx.run_id}"
-        built_digest = await provider.build_image(
-            dockerfile.parent,
-            dockerfile,
-            tag,
-            platform=None,
+        effective = await ensure_container_image(
+            ctx.env_spec,
+            provider,
+            ctx.run_id,
+            oci_digests=oci_digests,
         )
-        oci_digests[tag] = built_digest
-        return spec.model_copy(update={"image_ref": tag, "image_digest": built_digest})
+        ctx.env_spec = effective
+        return effective
 
     async def _run_tier1(
         self,
@@ -362,6 +339,7 @@ class TieredAuditOrchestrator:
                     docker_arch,
                     t1_mut_survival,
                 ) = await self._run_tier1(ctx, oci_digests)
+                ctx.determinism = determinism
                 findings.extend(t1_findings)
                 if t1_mut_survival is not None:
                     mutation_survival_rate = t1_mut_survival

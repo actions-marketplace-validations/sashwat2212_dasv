@@ -37,6 +37,16 @@ class _SeverityCount:
     count: int
 
 
+@dataclass(frozen=True)
+class _SignalPoint:
+    k: int
+    x: int
+    pass_at_k_y: int
+    pass_pow_k_y: int
+    pass_at_k_label: str
+    pass_pow_k_label: str
+
+
 def _build_jinja_env() -> Environment:
     return Environment(
         loader=PackageLoader("dasv.reporting", "templates"),
@@ -81,6 +91,41 @@ def _build_pass_pow_bars(pass_pow_k: dict[int, float]) -> tuple[list[_PassPowBar
     return bars, width
 
 
+def _build_signal_curve(
+    pass_at_k: dict[int, float],
+    pass_pow_k: dict[int, float],
+) -> tuple[list[_SignalPoint], str, str, int]:
+    ks = sorted(set(pass_at_k.keys()) | set(pass_pow_k.keys()))
+    if not ks:
+        return [], "", "", 260
+    top_y = 28
+    bottom_y = 116
+    span_y = bottom_y - top_y
+    points: list[_SignalPoint] = []
+    pak_coords: list[str] = []
+    ppk_coords: list[str] = []
+    for idx, k in enumerate(ks):
+        x = 36 + idx * 72
+        pak_val = max(0.0, min(1.0, float(pass_at_k.get(k, 0.0))))
+        ppk_val = max(0.0, min(1.0, float(pass_pow_k.get(k, 0.0))))
+        pak_y = int(round(bottom_y - pak_val * span_y))
+        ppk_y = int(round(bottom_y - ppk_val * span_y))
+        points.append(
+            _SignalPoint(
+                k=k,
+                x=x,
+                pass_at_k_y=pak_y,
+                pass_pow_k_y=ppk_y,
+                pass_at_k_label=f"{pak_val * 100.0:.0f}%",
+                pass_pow_k_label=f"{ppk_val * 100.0:.0f}%",
+            )
+        )
+        pak_coords.append(f"{x},{pak_y}")
+        ppk_coords.append(f"{x},{ppk_y}")
+    width = max(260, 72 + len(ks) * 72)
+    return points, " ".join(pak_coords), " ".join(ppk_coords), width
+
+
 def render_html_report(report: AuditReport) -> str:
     """Render an offline, zero-CDN, XSS-safe HTML Certification Report string."""
     env = _build_jinja_env()
@@ -95,6 +140,21 @@ def render_html_report(report: AuditReport) -> str:
     pass_pow_svg_width = 220
     if report.determinism is not None and report.determinism.pass_pow_k:
         pass_pow_bars, pass_pow_svg_width = _build_pass_pow_bars(report.determinism.pass_pow_k)
+
+    signal_points: list[_SignalPoint] = []
+    signal_pak_poly = ""
+    signal_ppk_poly = ""
+    signal_svg_width = 260
+    if report.signal_profile is not None:
+        (
+            signal_points,
+            signal_pak_poly,
+            signal_ppk_poly,
+            signal_svg_width,
+        ) = _build_signal_curve(
+            report.signal_profile.pass_at_k,
+            report.signal_profile.pass_pow_k,
+        )
 
     severity_counts: list[_SeverityCount] = []
     for sev in (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO):
@@ -111,6 +171,10 @@ def render_html_report(report: AuditReport) -> str:
         hack_gauge_color=_hackability_gauge_color(clamped_hack),
         pass_pow_bars=pass_pow_bars,
         pass_pow_svg_width=pass_pow_svg_width,
+        signal_points=signal_points,
+        signal_pak_poly=signal_pak_poly,
+        signal_ppk_poly=signal_ppk_poly,
+        signal_svg_width=signal_svg_width,
         severity_counts=severity_counts,
     )
 

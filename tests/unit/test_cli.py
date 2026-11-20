@@ -164,8 +164,9 @@ def test_cli_audit_honors_config_default_tiers_and_runtime_error_when_docker_abs
     assert "Grade A" not in res_no_docker.stdout
 
 
-def test_cli_mutate_dry_run_and_remaining_stage6_stubs(
+def test_cli_mutate_dry_run_rubric_and_profile_commands(
     hardened_harbor_env: Path,
+    minimal_verifiers_v1: Path,
     tmp_path: Path,
 ) -> None:
     # Populate a small Python source & test file inside the fixture so all mutators fire
@@ -194,10 +195,35 @@ def test_cli_mutate_dry_run_and_remaining_stage6_stubs(
     assert mut_data["one_off_mutations_generated"] == 1
     assert len(mut_data["conflicting_variants"]) == 1
 
-    for cmd in ("rubric", "profile"):
-        res = runner.invoke(app, [cmd, str(hardened_harbor_env)])
-        assert res.exit_code == EXIT_CONFIG_ERROR
-        assert "Stage 6" in res.stderr
+    # `dasv rubric` flags additive verifiers v1 RubricGroup at $0 (EXIT_AUDIT_FAIL)
+    rub_res = runner.invoke(app, ["rubric", str(minimal_verifiers_v1), "--static-only"])
+    assert rub_res.exit_code == EXIT_AUDIT_FAIL
+    assert "RULE-RUBR-001" in rub_res.stdout
+
+    # `dasv profile --traces` profiles offline traces and exports curriculum at $0 (EXIT_PASS)
+    traces_jsonl = tmp_path / "traces.jsonl"
+    traces_jsonl.write_text(
+        "\n".join(
+            json.dumps({"task_id": "hardened-calculator", "reward": 1.0 if i < 2 else 0.0})
+            for i in range(8)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    curr_path = tmp_path / "curriculum.jsonl"
+    prof_res = runner.invoke(
+        app,
+        [
+            "profile",
+            str(hardened_harbor_env),
+            "--traces",
+            str(traces_jsonl),
+            "--export-curriculum",
+            str(curr_path),
+        ],
+    )
+    assert prof_res.exit_code == EXIT_PASS, prof_res.stdout + prof_res.stderr
+    assert curr_path.is_file()
 
 
 def test_cli_redteam_config_and_runtime_error_contracts(
