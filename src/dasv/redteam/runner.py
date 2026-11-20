@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from dasv.adapters.base import EnvironmentAdapter
 from dasv.core.budget import BudgetGuard
 from dasv.core.config import SandboxConfig
-from dasv.core.errors import BudgetExceededError, ConfigError
+from dasv.core.errors import BudgetExceededError, ConfigError, RuntimeSandboxError
 from dasv.core.schemas import AuditFinding, EnvSpec, ExploitTrace, Severity
 from dasv.redteam.fixer_agent import FixerAgent
 from dasv.redteam.hacker_agent import (
@@ -24,6 +24,7 @@ from dasv.redteam.hacker_agent import (
 from dasv.redteam.llm_client import LLMClient, UnifiedLLMClient
 from dasv.sandbox.docker_provider import DockerSandboxProvider
 from dasv.sandbox.provider import SandboxProvider
+from dasv.verifier.clean_grader import ensure_container_image, find_env_dockerfile
 from dasv.verifier.gold_sanity import GoldSanityGate, apply_unified_diff_to_dir
 
 if TYPE_CHECKING:
@@ -110,6 +111,7 @@ class RedTeamRunner:
         semaphore: asyncio.Semaphore | None = None,
     ) -> RedTeamReport:
         """Execute adversarial attacks, optional Fixer + GoldSanityGate, and flush artifacts."""
+        effective_spec = await ensure_container_image(spec, self._provider, run_id)
         effective_fixer_model = fixer_model or attacker_model
         attempted: list[str] = []
         exploits: list[ExploitTrace] = []
@@ -121,7 +123,7 @@ class RedTeamRunner:
             attempted.append(hack_class)
             try:
                 attempt = await self._hacker.attack(
-                    spec,
+                    effective_spec,
                     hack_class=hack_class,
                     model=attacker_model,
                     run_id=f"{run_id}-h{idx}",
@@ -150,7 +152,7 @@ class RedTeamRunner:
             if propose_fix and attempt.extracted_artifact is not None:
                 try:
                     candidate_diff = await self._fixer.propose_fix(
-                        spec,
+                        effective_spec,
                         trace,
                         model=effective_fixer_model,
                     )
@@ -173,7 +175,7 @@ class RedTeamRunner:
 
                 if candidate_diff is not None:
                     gsg_res = await self._gsg.verify_patch(
-                        spec,
+                        effective_spec,
                         adapter,
                         attempt.extracted_artifact,
                         candidate_diff,
@@ -189,7 +191,9 @@ class RedTeamRunner:
                         }
                     )
                     if apply_verified_fixes and gsg_res.status == "verified_fix":
-                        applied_ok, _ = apply_unified_diff_to_dir(spec.root_path, candidate_diff)
+                        applied_ok, _ = apply_unified_diff_to_dir(
+                            effective_spec.root_path, candidate_diff
+                        )
                         if applied_ok:
                             applied_fix_ids.append(trace.exploit_id)
                 else:
@@ -282,9 +286,28 @@ def build_tier2_redteam_hook(
 ) -> TierHook:
     """Create a Tier 2 hook plugging `RedTeamRunner` directly into `TieredAuditOrchestrator`."""
     from dasv.core.orchestrator import TierHookResult
+    from dasv.rubric.prorubric_audit import audit_rubric_static
 
     async def _hook(ctx: AuditContext, _prior_findings: list[AuditFinding]) -> TierHookResult:
+        _targets, rubric_findings, _gate_specs = audit_rubric_static(
+            ctx.env_spec.root_path,
+            spec=ctx.env_spec,
+        )
+        has_container_target = bool(
+            ctx.env_spec.image_ref
+            or ctx.env_spec.image_digest
+            or find_env_dockerfile(ctx.env_spec) is not None
+        )
+        if not has_container_target and ctx.env_spec.rubric_type in {"rubric_llm", "hybrid"}:
+            return TierHookResult(findings=rubric_findings)
+
         provider: SandboxProvider = ctx.provider or DockerSandboxProvider(janitor=ctx.janitor)
+        health = await provider.health_check()
+        if not health.healthy:
+            raise RuntimeSandboxError(
+                f"Sandbox runtime '{health.runtime}' is unavailable for Tier 2: {health.detail}. "
+                "Start Docker/OrbStack to execute Tier 2 red-team sandboxes."
+            )
         effective_base_url = base_url or ctx.config.llm.base_url
         effective_attacker = attacker_model or ctx.config.llm.attacker_model
         effective_fixer = fixer_model or ctx.config.llm.fixer_model
@@ -316,7 +339,7 @@ def build_tier2_redteam_hook(
         if propose_fix and effective_fixer not in models:
             models.append(effective_fixer)
         return TierHookResult(
-            findings=rt_report.findings,
+            findings=[*rubric_findings, *rt_report.findings],
             exploits=rt_report.exploits,
             models_used=models,
             budget_exceeded=rt_report.budget_exceeded,
