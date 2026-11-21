@@ -1,0 +1,39 @@
+# LoRA Without Regret + Dr. GRPO / DAPO Ablation Protocol (SDD-05 §2.2)
+model:
+  base_model: "Qwen/Qwen2.5-Coder-3B-Instruct"
+  dtype: "bfloat16"
+  engine: "unsloth + trl"
+
+lora:
+  # LoRA Without Regret Rule 1: ALL linear layers (attention + MLP), NEVER attention-only
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+optimizer:
+  # LoRA Without Regret Rule 2: ~10x FullFT LR
+  learning_rate: 5.0e-5
+  scheduler: "cosine"
+  warmup_ratio: 0.05
+  # LoRA Without Regret Rule 4 (CRITICAL): Effective prompt batch size strictly < 32
+  prompts_per_step: 4
+  group_size_g: 8
+  gradient_accumulation_steps: 1
+
+rl_objective:
+  variant: "dr_grpo"
+  clip_low: 0.20
+  clip_high: 0.28
+  dynamic_sampling: true
+  kl_beta: 0.001
+  max_steps: 200
+  seed: 42
+
