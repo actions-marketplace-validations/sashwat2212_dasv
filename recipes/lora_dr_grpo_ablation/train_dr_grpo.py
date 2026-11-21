@@ -32,6 +32,7 @@ import random
 import re
 import resource
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -218,7 +219,22 @@ def extract_naive_files(completion: str) -> dict[str, bytes]:
     return files
 
 
-def _make_preexec_limits(cpu_sec: int, mem_mb: int) -> Any:
+def _can_nobody_exec(executable: str) -> bool:
+    """Return True if UID 65534 (nobody) can traverse both symlink and resolved paths."""
+    try:
+        raw = Path(executable)
+        for path in (raw, raw.resolve()):
+            if not (path.stat().st_mode & stat.S_IXOTH):
+                return False
+            for parent in path.parents:
+                if not (parent.stat().st_mode & stat.S_IXOTH):
+                    return False
+        return True
+    except OSError:
+        return False
+
+
+def _make_preexec_limits(cpu_sec: int, mem_mb: int, *, drop_to_nobody: bool = True) -> Any:
     """Apply POSIX rlimits and drop Linux root (UID 0) privileges to nobody (UID 65534)."""
 
     def _apply() -> None:
@@ -228,7 +244,7 @@ def _make_preexec_limits(cpu_sec: int, mem_mb: int) -> Any:
             if platform.system() == "Linux":
                 mem_bytes = mem_mb * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-                if os.geteuid() == 0:
+                if drop_to_nobody and os.geteuid() == 0:
                     nobody = pwd.getpwnam("nobody")
                     os.setgid(nobody.pw_gid)
                     os.setuid(nobody.pw_uid)
@@ -294,6 +310,7 @@ def grade_completion_subprocess(
                 os.chmod(vfile, 0o444)
                 os.chmod(vdir, 0o555)
                 env = build_scrubbed_env({"PYTHONPATH": str(ws)})
+                drop_nobody = _can_nobody_exec(sys.executable)
                 try:
                     proc = subprocess.run(
                         [sys.executable, "-m", "pytest", "-q", "--tb=short", str(vfile)],
@@ -302,7 +319,11 @@ def grade_completion_subprocess(
                         capture_output=True,
                         text=True,
                         timeout=timeout_sec,
-                        preexec_fn=_make_preexec_limits(int(math.ceil(timeout_sec)), mem_mb),
+                        preexec_fn=_make_preexec_limits(
+                            int(math.ceil(timeout_sec)),
+                            mem_mb,
+                            drop_to_nobody=drop_nobody,
+                        ),
                         check=False,
                     )
                     passed = proc.returncode == 0
@@ -356,6 +377,7 @@ def grade_completion_subprocess(
             dest.write_bytes(content)
 
         env = build_scrubbed_env({"PYTHONPATH": str(ws)})
+        drop_nobody = _can_nobody_exec(sys.executable)
         try:
             proc = subprocess.run(
                 [sys.executable, "-m", "pytest", "-q", "--tb=short", "tests/test_solution.py"],
@@ -364,7 +386,11 @@ def grade_completion_subprocess(
                 capture_output=True,
                 text=True,
                 timeout=timeout_sec,
-                preexec_fn=_make_preexec_limits(int(math.ceil(timeout_sec)), mem_mb),
+                preexec_fn=_make_preexec_limits(
+                    int(math.ceil(timeout_sec)),
+                    mem_mb,
+                    drop_to_nobody=drop_nobody,
+                ),
                 check=False,
             )
             passed = proc.returncode == 0
