@@ -1,7 +1,22 @@
-"""ProRubric additive-compensation & verbosity/fluff rubric audit engine (SDD-02, FEAT-15)."""
+"""ProRubric & CHERRL rubric/judge audit engine (SDD-02, FEAT-15, FEAT-16)."""
 
 from __future__ import annotations
 
+from dasv.rubric.divergence import (
+    DEFAULT_DELTA_THRESHOLD,
+    DEFAULT_TAU_THRESHOLD,
+    JudgeDivergenceResult,
+    JudgePairDivergence,
+    JudgeSample,
+    bootstrap_kendall_tau_ci,
+    build_default_divergence_samples,
+    detect_reference_free_judge,
+    kendall_tau_b,
+    load_judge_samples_jsonl,
+    mean_abs_delta,
+    run_judge_divergence_audit,
+    spearman_rho,
+)
 from dasv.rubric.perturbations import (
     DEFAULT_INFLATION_THRESHOLD,
     PERTURBATION_KINDS,
@@ -30,7 +45,12 @@ from dasv.rubric.prorubric_audit import (
 
 __all__ = [
     "CallableRubricScorer",
+    "DEFAULT_DELTA_THRESHOLD",
     "DEFAULT_INFLATION_THRESHOLD",
+    "DEFAULT_TAU_THRESHOLD",
+    "JudgeDivergenceResult",
+    "JudgePairDivergence",
+    "JudgeSample",
     "LLMRubricJudgeScorer",
     "PERTURBATION_KINDS",
     "PerturbationKind",
@@ -44,10 +64,18 @@ __all__ = [
     "RubricPerturbation",
     "VerbosityAuditResult",
     "audit_rubric_static",
+    "bootstrap_kendall_tau_ci",
+    "build_default_divergence_samples",
     "build_default_wrong_baseline",
     "build_prorubric_gate_spec",
+    "detect_reference_free_judge",
     "generate_verbosity_perturbations",
     "inspect_python_rubric_file",
     "inspect_rubric_dict",
+    "kendall_tau_b",
+    "load_judge_samples_jsonl",
+    "mean_abs_delta",
+    "run_judge_divergence_audit",
     "run_verbosity_perturbation_audit",
+    "spearman_rho",
 ]

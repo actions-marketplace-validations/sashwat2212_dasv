@@ -17,7 +17,7 @@ from rich.table import Table
 
 from dasv import __version__
 from dasv.adapters.registry import AdapterRegistry
-from dasv.core.budget import BudgetGuard
+from dasv.core.budget import BudgetGuard, is_local_endpoint
 from dasv.core.config import load_config
 from dasv.core.errors import (
     EXIT_AUDIT_FAIL,
@@ -51,7 +51,14 @@ from dasv.redteam import (
 from dasv.reporting.html_renderer import write_html_report
 from dasv.reporting.json_writer import write_report_json
 from dasv.reporting.sarif_writer import write_sarif
-from dasv.rubric import LLMRubricJudgeScorer, ProRubricAuditor, RubricJudgeScorer
+from dasv.rubric import (
+    DEFAULT_DELTA_THRESHOLD,
+    DEFAULT_TAU_THRESHOLD,
+    LLMRubricJudgeScorer,
+    ProRubricAuditor,
+    RubricJudgeScorer,
+    load_judge_samples_jsonl,
+)
 from dasv.sandbox.docker_provider import DockerSandboxProvider
 from dasv.sandbox.janitor import ContainerJanitor
 
@@ -831,6 +838,34 @@ def _parse_curriculum_buckets(raw: str | None) -> list[CurriculumBucket]:
     return selected
 
 
+def _parse_judge_configs(
+    judges_raw: str | None,
+    base_urls_raw: str | None,
+    default_base_url: str,
+) -> list[tuple[str, str]]:
+    """Parse `--judges modelA,modelB` and optional `--judge-base-urls urlA,urlB`."""
+    if judges_raw is None or not judges_raw.strip():
+        return []
+    models = [part.strip() for part in judges_raw.split(",") if part.strip()]
+    if len(models) < 2:
+        raise DasvError(
+            "`--judges` requires at least 2 comma-separated judge models (e.g. modelA,modelB).",
+            exit_code=EXIT_CONFIG_ERROR,
+        )
+    if base_urls_raw is None or not base_urls_raw.strip():
+        return [(m, default_base_url) for m in models]
+    urls = [part.strip() for part in base_urls_raw.split(",") if part.strip()]
+    if len(urls) == 1:
+        return [(m, urls[0]) for m in models]
+    if len(urls) != len(models):
+        raise DasvError(
+            f"`--judge-base-urls` count ({len(urls)}) must be 1 or match `--judges` "
+            f"count ({len(models)}).",
+            exit_code=EXIT_CONFIG_ERROR,
+        )
+    return list(zip(models, urls, strict=True))
+
+
 @app.command()
 def rubric(
     path: Annotated[
@@ -863,6 +898,49 @@ def rubric(
             help="Minimum score inflation delta triggering RULE-RUBR-002 (default: 0.15).",
         ),
     ] = 0.15,
+    judges: Annotated[
+        str | None,
+        typer.Option(
+            "--judges",
+            help="Comma-separated >=2 judge model IDs for CHERRL cross-family divergence.",
+        ),
+    ] = None,
+    judge_base_urls: Annotated[
+        str | None,
+        typer.Option(
+            "--judge-base-urls",
+            help="Comma-separated base URLs for `--judges` (1 shared or 1 per judge).",
+        ),
+    ] = None,
+    samples_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--samples",
+            help="Optional JSONL batch (`prompt`, `response`) for CHERRL judge divergence.",
+        ),
+    ] = None,
+    tau_threshold: Annotated[
+        float,
+        typer.Option(
+            "--tau-threshold",
+            min=-1.0,
+            max=1.0,
+            help="Minimum Kendall tau-b agreement before flagging RULE-RUBR-003 (default: 0.70).",
+        ),
+    ] = DEFAULT_TAU_THRESHOLD,
+    delta_threshold: Annotated[
+        float,
+        typer.Option(
+            "--delta-threshold",
+            min=0.0,
+            max=1.0,
+            help="Maximum mean absolute judge score delta before flagging (default: 0.15).",
+        ),
+    ] = DEFAULT_DELTA_THRESHOLD,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="Fixed RNG seed for CHERRL bootstrap CI (default: 42)."),
+    ] = 42,
     model: Annotated[
         str | None,
         typer.Option("--model", help="Judge model ID for dynamic verbosity perturbations."),
@@ -892,13 +970,18 @@ def rubric(
         typer.Option("--config", help="Optional path to dasv.toml."),
     ] = None,
 ) -> None:
-    """Run ProRubric additive-compensation (RULE-RUBR-001) & verbosity/fluff (RULE-RUBR-002)."""
+    """Run ProRubric (RULE-RUBR-001/002) & CHERRL judge divergence (RULE-RUBR-003)."""
     if not path.exists():
         typer.echo(f"Error: Rubric target path not found: '{path}'", err=True)
         raise typer.Exit(code=EXIT_CONFIG_ERROR)
 
     try:
         cfg = load_config(config_path)
+        effective_base_url = base_url or cfg.llm.base_url
+        judge_specs = _parse_judge_configs(judges, judge_base_urls, effective_base_url)
+        loaded_samples = (
+            load_judge_samples_jsonl(samples_path) if samples_path is not None else None
+        )
     except DasvError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=exc.exit_code) from exc
@@ -916,7 +999,6 @@ def rubric(
                 )
                 raise typer.Exit(code=EXIT_CONFIG_ERROR) from None
 
-    effective_base_url = base_url or cfg.llm.base_url
     effective_model = model or cfg.llm.attacker_model
     effective_max_cost = max_cost_usd if max_cost_usd is not None else cfg.budget.max_cost_usd
     effective_max_tokens = max_tokens if max_tokens is not None else cfg.budget.max_tokens
@@ -924,19 +1006,35 @@ def rubric(
     async def _run_rubric() -> int:
         auditor = ProRubricAuditor()
         scorer: RubricJudgeScorer | None = None
+        divergence_scorers: list[tuple[str, RubricJudgeScorer]] = []
         budget: BudgetGuard | None = None
-        if run_perturbations:
+
+        needs_llm = run_perturbations or bool(judge_specs)
+        if needs_llm:
+            all_urls = [effective_base_url, *(u for _m, u in judge_specs)]
+            budget_url = next(
+                (u for u in all_urls if not is_local_endpoint(u)),
+                effective_base_url,
+            )
             budget = BudgetGuard(
                 max_cost_usd=effective_max_cost,
                 max_tokens=effective_max_tokens,
-                base_url=effective_base_url,
+                base_url=budget_url,
             )
-            llm = UnifiedLLMClient(
-                base_url=effective_base_url,
-                budget=budget,
-                api_key_env=api_key_env,
-            )
-            scorer = LLMRubricJudgeScorer(llm, model=effective_model)
+            if run_perturbations:
+                llm = UnifiedLLMClient(
+                    base_url=effective_base_url,
+                    budget=budget,
+                    api_key_env=api_key_env,
+                )
+                scorer = LLMRubricJudgeScorer(llm, model=effective_model)
+            for j_model, j_url in judge_specs:
+                j_llm = UnifiedLLMClient(
+                    base_url=j_url,
+                    budget=budget,
+                    api_key_env=api_key_env,
+                )
+                divergence_scorers.append((j_model, LLMRubricJudgeScorer(j_llm, model=j_model)))
 
         budget_tripped = False
         try:
@@ -946,6 +1044,11 @@ def rubric(
                 scorer=scorer,
                 baseline_response=baseline_response,
                 inflation_threshold=inflation_threshold,
+                divergence_judges=divergence_scorers or None,
+                divergence_samples=loaded_samples,
+                tau_threshold=tau_threshold,
+                delta_threshold=delta_threshold,
+                seed=seed,
                 out_dir=out_dir,
             )
         except BudgetExceededError as exc:
@@ -984,6 +1087,27 @@ def rubric(
             table.add_row(
                 "Verbosity Inflation (RULE-RUBR-002)",
                 "FAIL" if not va.passed else "PASS",
+            )
+        if rubric_report.judge_divergence is not None:
+            jd = rubric_report.judge_divergence
+            table.add_row("CHERRL Judges", ", ".join(jd.judges))
+            table.add_row("CHERRL Samples Scored", str(jd.sample_count))
+            table.add_row(
+                "Reference-Free Pipeline",
+                "YES (HIGH risk)" if jd.is_reference_free else "NO (anchored/gated)",
+            )
+            for pair in jd.pairs:
+                table.add_row(
+                    f"Pair {pair.judge_a} vs {pair.judge_b}",
+                    (
+                        f"tau={pair.kendall_tau:.3f} [{pair.tau_ci_low:.3f}, "
+                        f"{pair.tau_ci_high:.3f}], rho={pair.spearman_rho:.3f}, "
+                        f"mean|delta|={pair.mean_abs_delta:.3f}"
+                    ),
+                )
+            table.add_row(
+                "Judge Divergence (RULE-RUBR-003)",
+                "FAIL" if not jd.passed else "PASS",
             )
         table.add_row("Recommended Gate Specs", str(len(rubric_report.recommended_gate_specs)))
         if rubric_report.total_tokens > 0 or rubric_report.total_cost_usd > 0.0:

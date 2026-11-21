@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -12,6 +13,15 @@ import yaml
 from pydantic import BaseModel, Field
 
 from dasv.core.schemas import AuditFinding, EnvSpec, Severity
+from dasv.rubric.divergence import (
+    DEFAULT_DELTA_THRESHOLD,
+    DEFAULT_TAU_THRESHOLD,
+    JudgeDivergenceResult,
+    JudgeSample,
+    build_default_divergence_samples,
+    detect_reference_free_judge,
+    run_judge_divergence_audit,
+)
 from dasv.rubric.perturbations import (
     DEFAULT_INFLATION_THRESHOLD,
     RubricJudgeScorer,
@@ -128,7 +138,7 @@ class RubricInspectionTarget(BaseModel):
 
 
 class RubricAuditReport(BaseModel):
-    """Complete output of `dasv rubric` combining static RULE-RUBR-001 & dynamic RULE-RUBR-002."""
+    """Complete output of `dasv rubric` combining RULE-RUBR-001, 002, and CHERRL 003."""
 
     task_id: str
     targets_inspected: list[RubricInspectionTarget] = Field(
@@ -137,6 +147,7 @@ class RubricAuditReport(BaseModel):
     findings: list[AuditFinding] = Field(default_factory=list[AuditFinding])
     recommended_gate_specs: list[ProRubricGateSpec] = Field(default_factory=list[ProRubricGateSpec])
     verbosity_audit: VerbosityAuditResult | None = None
+    judge_divergence: JudgeDivergenceResult | None = None
     total_tokens: int = 0
     total_cost_usd: float = 0.0
     budget_exceeded: bool = False
@@ -144,7 +155,7 @@ class RubricAuditReport(BaseModel):
     @property
     def passed(self) -> bool:
         return not self.budget_exceeded and not any(
-            f.rule_id in {"RULE-RUBR-001", "RULE-RUBR-002"} for f in self.findings
+            f.rule_id in {"RULE-RUBR-001", "RULE-RUBR-002", "RULE-RUBR-003"} for f in self.findings
         )
 
 
@@ -715,9 +726,14 @@ class ProRubricAuditor:
         scorer: RubricJudgeScorer | None = None,
         baseline_response: str | None = None,
         inflation_threshold: float = DEFAULT_INFLATION_THRESHOLD,
+        divergence_judges: Sequence[tuple[str, RubricJudgeScorer]] | None = None,
+        divergence_samples: Sequence[JudgeSample] | None = None,
+        tau_threshold: float = DEFAULT_TAU_THRESHOLD,
+        delta_threshold: float = DEFAULT_DELTA_THRESHOLD,
+        seed: int = 42,
         out_dir: Path | None = None,
     ) -> RubricAuditReport:
-        """Execute static ProRubric audit and (when `scorer` is given) dynamic verbosity harness."""
+        """Execute static ProRubric audit, verbosity harness, and optional CHERRL divergence."""
         effective_task_id = task_id or (spec.task_id if spec is not None else target_path.name)
         effective_prompt = (
             task_prompt
@@ -728,9 +744,11 @@ class ProRubricAuditor:
         targets, static_findings, gate_specs = audit_rubric_static(target_path, spec=spec)
         findings: list[AuditFinding] = list(static_findings)
         verbosity_res: VerbosityAuditResult | None = None
+        divergence_res: JudgeDivergenceResult | None = None
+        first_file = targets[0].file_path if targets else None
+        budget_tripped = False
 
         if scorer is not None:
-            first_file = targets[0].file_path if targets else None
             verbosity_res = await run_verbosity_perturbation_audit(
                 effective_prompt,
                 scorer,
@@ -747,12 +765,44 @@ class ProRubricAuditor:
                     )
                 )
 
+        if divergence_judges:
+            is_ref_free, ref_evidence = detect_reference_free_judge(target_path, targets)
+            samples = (
+                list(divergence_samples)
+                if divergence_samples
+                else build_default_divergence_samples(
+                    effective_prompt,
+                    baseline_response=baseline_response,
+                )
+            )
+            divergence_res = await run_judge_divergence_audit(
+                samples,
+                divergence_judges,
+                tau_threshold=tau_threshold,
+                delta_threshold=delta_threshold,
+                is_reference_free=is_ref_free,
+                reference_anchor_evidence=ref_evidence,
+                file_path=first_file,
+                seed=seed,
+            )
+            findings.extend(divergence_res.findings)
+            budget_tripped = divergence_res.partial_budget_exceeded
+            if not divergence_res.passed and not gate_specs:
+                gate_specs.append(
+                    build_prorubric_gate_spec(
+                        source_file=first_file,
+                        criterion_names=targets[0].criterion_names if targets else [],
+                    )
+                )
+
         report = RubricAuditReport(
             task_id=effective_task_id,
             targets_inspected=targets,
             findings=findings,
             recommended_gate_specs=gate_specs,
             verbosity_audit=verbosity_res,
+            judge_divergence=divergence_res,
+            budget_exceeded=budget_tripped,
         )
         if out_dir is not None:
             self.write_artifacts(out_dir, report)
