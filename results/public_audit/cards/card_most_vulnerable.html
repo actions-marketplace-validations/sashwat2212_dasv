@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dasv Certification Report — break-filter-js-from-html (Grade F)</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --surface: #131a26;
+      --surface-2: #1a2435;
+      --border: #26334a;
+      --text: #e6edf7;
+      --muted: #93a4bd;
+      --accent: #38bdf8;
+      --green: #22c55e;
+      --lime: #84cc16;
+      --amber: #f59e0b;
+      --orange: #f97316;
+      --red: #ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.5;
+    }
+    .container { max-width: 1120px; margin: 0 auto; }
+    .header-card {
+      background: linear-gradient(135deg, #131a26 0%, #192438 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 24px;
+      align-items: center;
+    }
+    @media (max-width: 780px) {
+      .header-card { grid-template-columns: 1fr; }
+    }
+    .brand {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+    h1 { margin: 0 0 8px 0; font-size: 24px; font-weight: 700; }
+    .meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .chip {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      color: var(--muted);
+    }
+    .chip strong { color: var(--text); font-weight: 600; }
+    .banner-warn {
+      margin-top: 16px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--amber);
+      background: rgba(245, 158, 11, 0.12);
+      color: #fde68a;
+      font-size: 13px;
+    }
+    .section {
+      margin-top: 22px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .section h2 {
+      margin: 0 0 14px 0;
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .kpi {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .kpi-label { font-size: 12px; color: var(--muted); }
+    .kpi-val {
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+    .chart-wrap { margin-top: 16px; overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pill {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+      text-transform: uppercase;
+    }
+    .sev-critical { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid #ef4444; }
+    .sev-high { background: rgba(249, 115, 22, 0.2); color: #fdba74; border: 1px solid #f97316; }
+    .sev-medium { background: rgba(245, 158, 11, 0.2); color: #fde047; border: 1px solid #f59e0b; }
+    .sev-low { background: rgba(56, 189, 248, 0.2); color: #7dd3fc; border: 1px solid #38bdf8; }
+    .sev-info { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; border: 1px solid #64748b; }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .muted { color: var(--muted); }
+    pre {
+      margin: 8px 0 0 0;
+      padding: 10px;
+      background: #090d14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    details summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .filter-btn {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 18px;
+      font-size: 12px;
+    }
+    .footer-grid > div {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header-card">
+      <div>
+        <div class="brand">dasv &middot; Deterministic Adversarial Sandbox Verifier</div>
+        <h1>break-filter-js-from-html</h1>
+        <div class="muted">There&#39;s a /app/filter.py script that attempts to remove JavaScript from HTML files to prevent XSS attacks.
+The /app/filter.py script takes an HTML file as a command-line argument and modifies it...</div>
+        <div class="meta-chips">
+          <span class="chip">Standard: <strong>harbor</strong></span>
+          <span class="chip">Rubric: <strong>deterministic</strong></span>
+          <span class="chip">Run: <strong>dasv-9dea2a760337</strong></span>
+          <span class="chip">Dataset SHA: <strong>6696441745f8</strong></span>
+          <span class="chip">Cost: <strong>$0.0000</strong></span>
+        </div>
+      </div>
+
+      <!-- Inline SVG Grade Badge -->
+      <div aria-label="Certification Grade F">
+        <svg width="112" height="112" viewBox="0 0 112 112" role="img">
+          <rect x="4" y="4" width="104" height="104" rx="18" fill="#0f172a" stroke="#ef4444" stroke-width="4"/>
+          <text x="56" y="26" text-anchor="middle" fill="#93a4bd" font-size="11" font-family="monospace">GRADE</text>
+          <text x="56" y="76" text-anchor="middle" fill="#ef4444" font-size="52" font-weight="700" font-family="sans-serif">F</text>
+          <text x="56" y="96" text-anchor="middle" fill="#cbd5e1" font-size="10" font-family="monospace">REJECTED</text>
+        </svg>
+      </div>
+
+      <!-- Inline SVG HackabilityScore Gauge -->
+      <div aria-label="Hackability Score 40.0">
+        <svg width="144" height="112" viewBox="0 0 144 112" role="img">
+          <circle cx="72" cy="60" r="40" fill="none" stroke="#1e293b" stroke-width="10"/>
+          <circle cx="72" cy="60" r="40" fill="none" stroke="#f97316" stroke-width="10"
+                  stroke-dasharray="100.53 251.33" stroke-linecap="round"
+                  transform="rotate(-90 72 60)"/>
+          <text x="72" y="58" text-anchor="middle" fill="#e6edf7" font-size="20" font-weight="700" font-family="monospace">40.0</text>
+          <text x="72" y="74" text-anchor="middle" fill="#93a4bd" font-size="9" font-family="monospace">HACKABILITY</text>
+          <text x="72" y="106" text-anchor="middle" fill="#93a4bd" font-size="10" font-family="monospace">0 (SAFE) - 100</text>
+        </svg>
+      </div>
+    </header>
+
+
+
+    <section class="section">
+      <h2>
+        <span>Audit Findings</span>
+        <span class="mono muted">3 total</span>
+      </h2>
+      <div class="filters" role="group" aria-label="Filter findings by severity">
+        <button class="filter-btn active" type="button" onclick="dasvFilter('all', this)">All (3)</button>
+        <button class="filter-btn" type="button" onclick="dasvFilter('critical', this)">CRITICAL (2)</button>
+        <button class="filter-btn" type="button" onclick="dasvFilter('high', this)">HIGH (1)</button>
+      </div>
+      <table id="findings-table">
+        <thead>
+          <tr>
+            <th>Rule</th>
+            <th>Severity</th>
+            <th>Tier</th>
+            <th>Location</th>
+            <th>Details &amp; Remediation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-severity="high">
+            <td class="mono"><strong>RULE-HERM-001</strong><div class="muted">dasv</div></td>
+            <td><span class="pill sev-high">high</span></td>
+            <td class="mono">T0</td>
+            <td class="mono">environment/Dockerfile:2</td>
+            <td>
+              <div><strong>Unpinned base image without @sha256 digest</strong></div>
+              <pre>FROM python:3.13-slim-bookworm does not pin an immutable @sha256 digest.</pre>
+              <div class="muted" style="margin-top:6px;">Remediation: Pin the base image to an immutable OCI digest (e.g., FROM python:3.12-slim@sha256:...).</div>
+            </td>
+          </tr>
+          <tr data-severity="critical">
+            <td class="mono"><strong>RULE-BNDY-001</strong><div class="muted">dasv</div></td>
+            <td><span class="pill sev-critical">critical</span></td>
+            <td class="mono">T0</td>
+            <td class="mono">environment/Dockerfile:23</td>
+            <td>
+              <div><strong>Verifier or solution files copied into agent image</strong></div>
+              <pre>Dockerfile copies sensitive path: COPY tests/test_outputs.py /app</pre>
+              <div class="muted" style="margin-top:6px;">Remediation: Remove tests/, grader/, and solution/ from the agent image; mount verifiers read-only in a clean Verification Plane.</div>
+            </td>
+          </tr>
+          <tr data-severity="critical">
+            <td class="mono"><strong>RULE-BNDY-002</strong><div class="muted">dasv</div></td>
+            <td><span class="pill sev-critical">critical</span></td>
+            <td class="mono">T0</td>
+            <td class="mono">task.toml:1</td>
+            <td>
+              <div><strong>Missing or unsafe network isolation configuration</strong></div>
+              <pre>Harbor v1.1 config explicitly sets allow_internet = true (outbound network egress enabled).</pre>
+              <div class="muted" style="margin-top:6px;">Remediation: Configure allow_internet = false / network_mode = &#39;no-network&#39; (Harbor) or &#39;none&#39; (--network=none) to prevent agents from exfiltrating or fetching solutions online.</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+
+
+    <footer class="section">
+      <h2>
+        <span>Reproducibility Manifest</span>
+        <span class="mono muted">schema v1.0.0</span>
+      </h2>
+      <div class="footer-grid mono">
+        <div><span class="muted">dasv_version:</span> 0.1.0</div>
+        <div><span class="muted">timestamp_utc:</span> 2026-11-21T16:50:38.079613+00:00</div>
+        <div><span class="muted">host:</span> darwin/arm64</div>
+        <div><span class="muted">docker_arch:</span> n/a</div>
+        <div><span class="muted">git_sha:</span> <span title="2fd12b88aafdd04a52c298e3940bcb189f9766d6">2fd12b88aafd</span></div>
+        <div><span class="muted">rng_seed:</span> 42</div>
+        <div><span class="muted">tokens:</span> 0</div>
+        <div><span class="muted">cost_usd:</span> $0.0000</div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    function dasvFilter(sev, btn) {
+      document.querySelectorAll('.filter-btn').forEach(function (b) { b.classList.remove('active'); });
+      if (btn) { btn.classList.add('active'); }
+      document.querySelectorAll('#findings-table tbody tr').forEach(function (row) {
+        row.style.display = (sev === 'all' || row.getAttribute('data-severity') === sev) ? '' : 'none';
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,1034 @@
+{
+  "schema_version": "1.0.0",
+  "generated_utc": "2026-11-21T16:50:39.914658+00:00",
+  "dasv_version": "0.1.0",
+  "total_tasks_audited": 45,
+  "containerized_task_count": 35,
+  "api_cost_usd": 0.0,
+  "local_ollama_tokens": 22735,
+  "sources": {
+    "terminal_bench_2": {
+      "repo_url": "https://github.com/harbor-framework/terminal-bench-2.git",
+      "ecosystem": "harbor",
+      "pinned_sha": "2fd12b88aafdd04a52c298e3940bcb189f9766d6",
+      "license": "Apache-2.0"
+    },
+    "prime_verifiers": {
+      "repo_url": "https://github.com/PrimeIntellect-ai/verifiers.git",
+      "ecosystem": "verifiers_v1",
+      "pinned_sha": "96f07072dcd04207869529b5eb8391a0ab469a3f",
+      "license": "MIT"
+    },
+    "meta_openenv": {
+      "repo_url": "https://github.com/meta-pytorch/OpenEnv.git",
+      "ecosystem": "openenv",
+      "pinned_sha": "1f9a7638696fdbc02344d4af84315cd7c3564c90",
+      "license": "BSD-3-Clause"
+    }
+  },
+  "grade_distribution": {
+    "A": 10,
+    "F": 35
+  },
+  "severity_distribution": {
+    "critical": 37,
+    "high": 42
+  },
+  "rule_task_frequency": {
+    "RULE-HERM-001": 35,
+    "RULE-BNDY-002": 35,
+    "RULE-BNDY-001": 2
+  },
+  "rule_frequency": {
+    "RULE-HERM-001": 42,
+    "RULE-BNDY-002": 35,
+    "RULE-BNDY-001": 2
+  },
+  "notable_boundary_leaks": [
+    {
+      "ecosystem": "harbor",
+      "task_id": "break-filter-js-from-html",
+      "rule_id": "RULE-BNDY-001",
+      "file_path": "environment/Dockerfile",
+      "line_number": 23,
+      "evidence": "Dockerfile copies sensitive path: COPY tests/test_outputs.py /app"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "circuit-fibsqrt",
+      "rule_id": "RULE-BNDY-001",
+      "file_path": "environment/Dockerfile",
+      "line_number": 9,
+      "evidence": "Dockerfile copies sensitive path: COPY tests/sim.c /app"
+    }
+  ],
+  "ecosystem_breakdown": {
+    "harbor": {
+      "count": 28,
+      "grades": {
+        "F": 28
+      },
+      "total_findings": 59,
+      "rules": {
+        "RULE-HERM-001": 29,
+        "RULE-BNDY-002": 28,
+        "RULE-BNDY-001": 2
+      },
+      "rule_tasks": {
+        "RULE-HERM-001": 28,
+        "RULE-BNDY-002": 28,
+        "RULE-BNDY-001": 2
+      }
+    },
+    "openenv": {
+      "count": 7,
+      "grades": {
+        "F": 7
+      },
+      "total_findings": 20,
+      "rules": {
+        "RULE-HERM-001": 13,
+        "RULE-BNDY-002": 7
+      },
+      "rule_tasks": {
+        "RULE-HERM-001": 7,
+        "RULE-BNDY-002": 7
+      }
+    },
+    "verifiers_v1": {
+      "count": 10,
+      "grades": {
+        "A": 10
+      },
+      "total_findings": 0,
+      "rules": {},
+      "rule_tasks": {}
+    }
+  },
+  "cherrl_live_ollama_audit": [
+    {
+      "task_id": "alphabet-sort",
+      "judges": [
+        "qwen2.5-coder:7b",
+        "gemma3:4b"
+      ],
+      "sample_count": 5,
+      "is_reference_free": false,
+      "kendall_tau": 0.0,
+      "tau_ci": [
+        0.0,
+        0.0
+      ],
+      "spearman_rho": 0.0,
+      "mean_abs_delta": 0.05,
+      "divergent": true,
+      "degenerate_reason": "constant score vector from at least one judge (zero variance)",
+      "scores_by_judge": {
+        "qwen2.5-coder:7b": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "gemma3:4b": [
+          0.0,
+          0.0,
+          0.05,
+          0.1,
+          0.1
+        ]
+      },
+      "rule_ids": [
+        "RULE-RUBR-003"
+      ]
+    },
+    {
+      "task_id": "bash-interception",
+      "judges": [
+        "qwen2.5-coder:7b",
+        "gemma3:4b"
+      ],
+      "sample_count": 5,
+      "is_reference_free": true,
+      "kendall_tau": 0.0,
+      "tau_ci": [
+        0.0,
+        0.0
+      ],
+      "spearman_rho": 0.0,
+      "mean_abs_delta": 0.07,
+      "divergent": true,
+      "degenerate_reason": "constant score vector from at least one judge (zero variance)",
+      "scores_by_judge": {
+        "qwen2.5-coder:7b": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "gemma3:4b": [
+          0.0,
+          0.0,
+          0.05,
+          0.2,
+          0.1
+        ]
+      },
+      "rule_ids": [
+        "RULE-RUBR-003"
+      ]
+    },
+    {
+      "task_id": "code-golf",
+      "judges": [
+        "qwen2.5-coder:7b",
+        "gemma3:4b"
+      ],
+      "sample_count": 5,
+      "is_reference_free": true,
+      "kendall_tau": 0.0,
+      "tau_ci": [
+        0.0,
+        0.0
+      ],
+      "spearman_rho": 0.0,
+      "mean_abs_delta": 0.19,
+      "divergent": true,
+      "degenerate_reason": "constant score vector from at least one judge (zero variance)",
+      "scores_by_judge": {
+        "qwen2.5-coder:7b": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "gemma3:4b": [
+          0.0,
+          0.8,
+          0.05,
+          0.0,
+          0.1
+        ]
+      },
+      "rule_ids": [
+        "RULE-RUBR-003"
+      ]
+    },
+    {
+      "task_id": "color-codeword",
+      "judges": [
+        "qwen2.5-coder:7b",
+        "gemma3:4b"
+      ],
+      "sample_count": 5,
+      "is_reference_free": true,
+      "kendall_tau": 0.176777,
+      "tau_ci": [
+        -0.408248,
+        1.0
+      ],
+      "spearman_rho": 0.186339,
+      "mean_abs_delta": 0.34,
+      "divergent": true,
+      "degenerate_reason": null,
+      "scores_by_judge": {
+        "qwen2.5-coder:7b": [
+          0.0,
+          0.0,
+          0.0,
+          0.8,
+          0.0
+        ],
+        "gemma3:4b": [
+          0.05,
+          0.8,
+          0.05,
+          0.2,
+          0.2
+        ]
+      },
+      "rule_ids": [
+        "RULE-RUBR-003"
+      ]
+    },
+    {
+      "task_id": "deepwiki",
+      "judges": [
+        "qwen2.5-coder:7b",
+        "gemma3:4b"
+      ],
+      "sample_count": 5,
+      "is_reference_free": true,
+      "kendall_tau": 0.0,
+      "tau_ci": [
+        0.0,
+        0.0
+      ],
+      "spearman_rho": 0.0,
+      "mean_abs_delta": 0.21,
+      "divergent": true,
+      "degenerate_reason": "constant score vector from at least one judge (zero variance)",
+      "scores_by_judge": {
+        "qwen2.5-coder:7b": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "gemma3:4b": [
+          0.0,
+          0.8,
+          0.05,
+          0.0,
+          0.2
+        ]
+      },
+      "rule_ids": [
+        "RULE-RUBR-003"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "ecosystem": "harbor",
+      "task_id": "adaptive-rejection-sampler",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "ed6c25a2958425367270a6aa8557ee9260295fd512f3b3897a0f945457f4e8b4"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "bn-fit-modify",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "5aabdb435d1d82746b2947b8d948ca1dfd25eae393d857b585b11f0e5192c215"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "break-filter-js-from-html",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 40.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-001",
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "6696441745f8c1ea9877d7eb002418e78bf2eafee0b52042aa7c79a8fa141488"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "build-cython-ext",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "37f15e579820709f66b68118fbb769fb4889cac0cba9b7451ae172eea0a585d1"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "build-pmars",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "debian:13.0-slim",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "db14373123d52f061e81a07cc1c5e35d798343811665978872f730fc8f9639b3"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "build-pov-ray",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "2d0f0ea56d39e9bef2a5d9dbf0cb43f8c9a3221965d642d3c8253e6ff117c67c"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "caffe-cifar-10",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "abcab272c5ca28fab30887b73ce2398bc39df7c9e303d5a1a71662b31a5e16a7"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "cancel-async-tasks",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "6c0a3126423715b32bb2adc987f0ac707dc80344c7a0c1fda70cc02f658b494e"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "chess-best-move",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "d2537d4ef979b79575329f9c8682867a9f58ae2273d5864fbe46783c91b99684"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "circuit-fibsqrt",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 40.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-001",
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "8c6a727ae2b619356f56fdd8f00abd684f50fa41780d9da6d6d0890ede98c666"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "cobol-modernization",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "572d41f184a7efb9517083c961c6ab5a1469a846c5993bfd4be50a2cd6c2aac5"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "code-from-image",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "d8167442900f611aa870b991ed8d343c83ade0e0961f678e458c88b197f28a9f"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "compile-compcert",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "51e5f29d8a3c561ae8f0c89b638866b8672f4c31e8cb73d970e3de60f413b667"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "configure-git-webserver",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "8d05a4f70bb642a32439389cce8d95e9bcf145ed7e645fba3e28478976e3116c"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "constraints-scheduling",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "a3e381dea81ba95bf815b0e6f0913b4ec32ec96440c9baa2c4417873c7583780"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "count-dataset-tokens",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "801e6e61dc9330ecd0ccf57fdf37fdd6077f0d7c03c99d86499cfa50c8f7c768"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "crack-7z-hash",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "9bae795e554fd57b82f52ac3739bbb1e0dbc8363d2eb03372df7a915db1a599c"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "custom-memory-heap-crash",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "8bfc3dc0539910aea2f793b86a07042e1b4c2cd05ec5f147bc42bec4f50b2992"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "db-wal-recovery",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "5616cdbad664d798572d2549900f0d85f6f4607c09d4b22580b06ccbb23bca1d"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "distribution-search",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "90e48d2a7e087334e04cf2ba9fd0916b44bbaa2b18986e9731288ec976c96b19"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "dna-assembly",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "7a7397920a9cc0b7d4b15d835be6b40e52f0da21f53df323c9587266578533c1"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "dna-insert",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "ca4f349ffb58b4c61e938ce8b443c5412aaa99af8d5264189a5ade6ed963f60b"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "extract-elf",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "274409fe56434b43bf72e1b1e1c6c41fea393740e2d883752a0dfd35e73d28b4"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "extract-moves-from-video",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "4201986e7315116e64f07dd037b4c5781bafac1ba67137ffc60240881ca139d5"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "feal-differential-cryptanalysis",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "36f8a58a9d71eea54415cfa3f7f2ddebe9a4189f434de6e584c0b05fa38d13ba"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "feal-linear-cryptanalysis",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "f823210d6e825892971aa972a14da1f0da66ddbe13bae58cd051078d9f1446f5"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "filter-js-from-html",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "python:3.13-slim-bookworm",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "83c883b37177c4b82a41990199d5d9638e066e359d77ece1f38d073c6ad55a4f"
+    },
+    {
+      "ecosystem": "harbor",
+      "task_id": "financial-document-processor",
+      "standard": "harbor",
+      "rubric_type": "deterministic",
+      "has_oracle": true,
+      "image_ref": "ubuntu:24.04",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "455fb917df4859716921c742811824fec667b020d2f8e48c5db0a305f1d05607"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "alphabet-sort",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "3b4f8845fd7f0e03ed890ca4cf450a0cca32de387159c339b421d5c55e8dc477"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "bash-interception",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "a7497e674c94e7dd8775b577bca50bfbd9f58f685dd55bae2b68bc585d2a220c"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "code-golf",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "7054e525803c7023d2f3e4428228526238da703760f047dc6585aee52a6c1e9f"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "color-codeword",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "bba893f0c7af09c59c9b45f9eedfc191e6e7e7dc16c7cb0660dc8020fd46f5b2"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "deepwiki",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "9eeee4e8d55dd70f24536de35a733fd066cbf16b1daeb5577a2b4fca656647de"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "glossary",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "b54a240c67b6794401601b8ea6035da025434082684c9642d6f6c41853e600a5"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "gsm8k",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "ff71f6972a9aa9804eb35da3e58a6b455fae1cb5871f62863bce2cff79e51101"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "kuhn-poker",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "330e74df89db3f5ffa4381c3cfdfb2795d1c215b8456dc6d20956844e2068c04"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "wiki-search",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "0a07eae073ba89aff83d90d5858edb49734b4e3ecea5679f6f007dcde13f6c77"
+    },
+    {
+      "ecosystem": "verifiers_v1",
+      "task_id": "wordle",
+      "standard": "verifiers_v1",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": null,
+      "grade": "A",
+      "hackability_score": 0.0,
+      "finding_count": 0,
+      "rule_ids": [],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "1a6f4ed845326846e075648a38a7042743101c9eb466172b238a9c4a422ca415"
+    },
+    {
+      "ecosystem": "openenv",
+      "task_id": "agent_world_model_env",
+      "standard": "openenv",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": "ghcr.io/huggingface/openenv-base:latest",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "4238d53f9973d66844087e35331f0e10f6754b2d3d31320c32ddeea0448c5a93"
+    },
+    {
+      "ecosystem": "openenv",
+      "task_id": "coding_env",
+      "standard": "openenv",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": "python:3.11-slim",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 2,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "4edb45c514eb45d341b9fb165e926da2687d0eef7deea0676f53089854fa2610"
+    },
+    {
+      "ecosystem": "openenv",
+      "task_id": "coding_tools_env",
+      "standard": "openenv",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": "${BASE_IMAGE}",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "7e92038936832940ca59438c852c44c632c135b501076feb723323287eb48050"
+    },
+    {
+      "ecosystem": "openenv",
+      "task_id": "dipg_safety_env",
+      "standard": "openenv",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": "${BASE_IMAGE}",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "4d2e0138c538101639c2775cd94b003497e2f5f1d6c4f5c401c8f3c632fff953"
+    },
+    {
+      "ecosystem": "openenv",
+      "task_id": "finqa_env",
+      "standard": "openenv",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": "${BASE_IMAGE}",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "0f8b58d0758e9d889f189d85713bcd07d44ea8448914ac41887299c044fe81b2"
+    },
+    {
+      "ecosystem": "openenv",
+      "task_id": "fraud_triage_env",
+      "standard": "openenv",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": "${BASE_IMAGE}",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "f46c502ab76e3c9730e74772282c185c57ac41a9a3e6e92a27ab68a2d73e04f8"
+    },
+    {
+      "ecosystem": "openenv",
+      "task_id": "git_env",
+      "standard": "openenv",
+      "rubric_type": "deterministic",
+      "has_oracle": false,
+      "image_ref": "${BASE_IMAGE}",
+      "grade": "F",
+      "hackability_score": 20.0,
+      "finding_count": 3,
+      "rule_ids": [
+        "RULE-BNDY-002",
+        "RULE-HERM-001"
+      ],
+      "rubric_findings_added": 0,
+      "dataset_sha256": "bc9c46e7dc96b9994d2be458bd26ceae0bc9727e27ad4f78b72337438391d487"
+    }
+  ]
+}

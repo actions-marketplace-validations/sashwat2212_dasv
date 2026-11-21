@@ -1,0 +1,20 @@
+{
+  "terminal_bench_2": {
+    "repo_url": "https://github.com/harbor-framework/terminal-bench-2.git",
+    "ecosystem": "harbor",
+    "pinned_sha": "2fd12b88aafdd04a52c298e3940bcb189f9766d6",
+    "license": "Apache-2.0"
+  },
+  "prime_verifiers": {
+    "repo_url": "https://github.com/PrimeIntellect-ai/verifiers.git",
+    "ecosystem": "verifiers_v1",
+    "pinned_sha": "96f07072dcd04207869529b5eb8391a0ab469a3f",
+    "license": "MIT"
+  },
+  "meta_openenv": {
+    "repo_url": "https://github.com/meta-pytorch/OpenEnv.git",
+    "ecosystem": "openenv",
+    "pinned_sha": "1f9a7638696fdbc02344d4af84315cd7c3564c90",
+    "license": "BSD-3-Clause"
+  }
+}

@@ -1,0 +1,37 @@
+task_id: code-golf
+prorubric_gates:
+- protocol: prorubric_conjunctive_v1
+  formula: score = (1.0 if all_required_pass and no_hard_violation else 0.0) * sum(w_i
+    * c_i)
+  source_file: null
+  mandatory_gates:
+  - name: factual_correctness
+    role: mandatory_gate
+    weight: 0.0
+    description: Must pass unconditionally before any secondary rubric credit is awarded.
+  hard_violation_checks:
+  - name: no_factual_contradiction_or_fabrication
+    role: hard_violation_check
+    weight: 0.0
+    description: Any fabricated citation, hallucinated fact, or unsafe shortcut forces
+      0.0.
+  secondary_criteria:
+  - name: clarity_and_structure
+    role: secondary_weighted
+    weight: 0.5
+    description: Weighted secondary quality signal awarded ONLY when all gates pass.
+  - name: completeness
+    role: secondary_weighted
+    weight: 0.5
+    description: Weighted secondary quality signal awarded ONLY when all gates pass.
+  python_wrapper_snippet: "def prorubric_conjunctive_score(\n    gate_checks: dict[str,\
+    \ bool],\n    violation_flags: dict[str, bool],\n    secondary_scores: dict[str,\
+    \ float],\n) -> float:\n    required_gates = ['factual_correctness']\n    hard_violations\
+    \ = ['no_factual_contradiction_or_fabrication']\n    secondary_weights = {'clarity_and_structure':\
+    \ 0.5, 'completeness': 0.5}\n    all_required_pass = all(bool(gate_checks.get(k,\
+    \ False)) for k in required_gates)\n    no_hard_violation = not any(\n       \
+    \ bool(violation_flags.get(k, False)) for k in hard_violations\n    )\n    if\
+    \ not (all_required_pass and no_hard_violation):\n        return 0.0\n    total_w\
+    \ = sum(secondary_weights.values()) or 1.0\n    weighted = sum(\n        secondary_scores.get(k,\
+    \ 0.0) * w for k, w in secondary_weights.items()\n    )\n    return max(0.0, min(1.0,\
+    \ weighted / total_w))\n"
