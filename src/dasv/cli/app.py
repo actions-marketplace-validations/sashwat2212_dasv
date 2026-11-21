@@ -35,6 +35,16 @@ from dasv.core.schemas import (
     CurriculumBucket,
     Severity,
 )
+from dasv.export import (
+    EXPORT_FORMATS,
+    ExportResult,
+    export_openenv_traces,
+    export_prime_rl,
+    export_trl,
+    export_verl,
+    load_curriculum_entries,
+    load_exploit_traces,
+)
 from dasv.mutate import MutationSuiteRunner
 from dasv.profile import (
     SignalProfiler,
@@ -1299,6 +1309,97 @@ def profile(
     code = asyncio.run(_run_profile())
     if code != EXIT_PASS:
         raise typer.Exit(code=code)
+
+
+@app.command(name="export")
+def export_cmd(
+    export_format: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            help="Target RL trainer format: trl | verl | prime_rl | openenv.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output file path (or directory) for exported dataset."),
+    ],
+    curriculum: Annotated[
+        Path | None,
+        typer.Option(
+            "--curriculum",
+            help="Calibrated curriculum manifest (.jsonl or .yaml) from `dasv profile`.",
+        ),
+    ] = None,
+    exploits: Annotated[
+        Path | None,
+        typer.Option(
+            "--exploits",
+            help="ExploitTrace JSONL (`exploits.jsonl`) from `dasv redteam` (for openenv).",
+        ),
+    ] = None,
+    include_buckets: Annotated[
+        str | None,
+        typer.Option(
+            "--include-buckets",
+            help="Optional comma-separated CurriculumBucket filter (default: goldilocks).",
+        ),
+    ] = None,
+) -> None:
+    """Export certified GOLDILOCKS curricula & exploit traces to TRL/veRL/prime-rl/OpenEnv."""
+    fmt = export_format.strip().lower()
+    if fmt not in EXPORT_FORMATS:
+        typer.echo(
+            f"Error: Unsupported export format '{export_format}'. "
+            f"Supported formats: {', '.join(EXPORT_FORMATS)}.",
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_CONFIG_ERROR)
+
+    try:
+        buckets = _parse_curriculum_buckets(include_buckets)
+        result: ExportResult
+        if fmt == "openenv":
+            loaded_exploits = load_exploit_traces(exploits) if exploits is not None else []
+            loaded_entries = (
+                load_curriculum_entries(curriculum, include_buckets=buckets)
+                if curriculum is not None
+                else []
+            )
+            result = export_openenv_traces(
+                exploits=loaded_exploits,
+                entries=loaded_entries,
+                out_path=out,
+            )
+        else:
+            if curriculum is None:
+                raise DasvError(
+                    f"`--curriculum` is required for `--format {fmt}`.",
+                    exit_code=EXIT_CONFIG_ERROR,
+                )
+            loaded_entries = load_curriculum_entries(curriculum, include_buckets=buckets)
+            if fmt == "trl":
+                result = export_trl(loaded_entries, out)
+            elif fmt == "verl":
+                result = export_verl(loaded_entries, out)
+            else:
+                result = export_prime_rl(loaded_entries, out)
+    except DasvError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    table = Table(title=f"RL Trainer Export ({result.format})")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+    table.add_row("Records Exported", str(result.record_count))
+    table.add_row("Output Path", str(result.output_path))
+    if result.companion_paths:
+        table.add_row(
+            "Companion Artifacts",
+            ", ".join(str(p) for p in result.companion_paths),
+        )
+    table.add_row("Manifest SHA-256", result.manifest_sha[:16])
+    console.print(table)
 
 
 def main() -> None:
