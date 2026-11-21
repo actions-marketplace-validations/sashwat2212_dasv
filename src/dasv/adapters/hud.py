@@ -10,6 +10,7 @@ from dasv.adapters.base import AdapterCapabilities
 from dasv.adapters.native import NativeDelegateRunner
 from dasv.core.errors import ConfigError, RuntimeSandboxError
 from dasv.core.schemas import AuditFinding, EnvSpec, EnvStandard
+from dasv.verifier.clean_grader import coerce_grading_context, outcome_to_details
 
 
 def _pyproject_mentions_hud(path: Path) -> tuple[bool, dict[str, Any]]:
@@ -82,19 +83,46 @@ class HudAdapter:
             else str(raw.get("description") or "")
         )
         verifier_paths = ["tasks/grade.py"] if (path / "tasks" / "grade.py").is_file() else []
-        image_ref = str(raw["image"]) if isinstance(raw.get("image"), str) else None
+        if (path / "tests").is_dir() and "tests/" not in verifier_paths:
+            verifier_paths.append("tests/")
+        explicit_image = (
+            str(raw["image"]).strip()
+            if isinstance(raw.get("image"), str) and raw["image"].strip()
+            else None
+        )
+        image_digest: str | None = None
+        if explicit_image and "@sha256:" in explicit_image:
+            image_digest = "sha256:" + explicit_image.split("@sha256:", 1)[1]
+
+        dockerfile = path / "environment" / "Dockerfile"
+        if not dockerfile.is_file():
+            dockerfile = path / "Dockerfile"
+        dockerfile_rel = dockerfile.relative_to(path).as_posix() if dockerfile.is_file() else None
+
+        oracle_entrypoint: str | None = None
+        configured_oracle = raw.get("oracle_entrypoint")
+        if isinstance(configured_oracle, str) and configured_oracle.strip():
+            oracle_entrypoint = configured_oracle.strip()
+        elif (path / "solution" / "solve.sh").is_file():
+            oracle_entrypoint = "solution/solve.sh"
+        has_oracle = oracle_entrypoint is not None and (path / oracle_entrypoint).exists()
 
         return EnvSpec(
             task_id=task_id,
             standard=EnvStandard.HUD,
             root_path=path.resolve(),
             instruction_text=instruction_text,
-            image_ref=image_ref,
+            image_ref=explicit_image,
+            image_digest=image_digest,
+            has_oracle=has_oracle,
+            oracle_entrypoint=oracle_entrypoint,
             verifier_paths=verifier_paths,
             rubric_type="deterministic",
             metadata={
                 "hud_config": raw,
                 "network_mode": raw.get("network_mode"),
+                "image_explicit": explicit_image is not None,
+                "dockerfile_path": dockerfile_rel,
             },
         )
 
@@ -117,7 +145,38 @@ class HudAdapter:
         return result.findings
 
     async def run_oracle(self, spec: EnvSpec, sandbox: Any) -> tuple[float, dict[str, Any]]:
-        raise RuntimeSandboxError("HUD Tier 1 oracle execution is scheduled for Stage 6 M4.")
+        if not spec.has_oracle or not spec.oracle_entrypoint:
+            raise RuntimeSandboxError(
+                f"HUD task '{spec.task_id}' does not declare an existing oracle_entrypoint "
+                "(set oracle_entrypoint in hud.toml or provide solution/solve.sh)."
+            )
+        oracle_path = (spec.root_path / spec.oracle_entrypoint).resolve()
+        try:
+            oracle_path.relative_to(spec.root_path.resolve())
+        except ValueError as exc:
+            raise RuntimeSandboxError(
+                f"Oracle entrypoint '{spec.oracle_entrypoint}' escapes task root."
+            ) from exc
+        if not oracle_path.is_file():
+            raise RuntimeSandboxError(f"Oracle script not found: {oracle_path}")
+
+        ctx = coerce_grading_context(sandbox)
+        outcome, artifact = await ctx.grader.execute_and_grade(
+            spec,
+            ctx.run_id,
+            script_bytes=oracle_path.read_bytes(),
+            timeout_sec=ctx.timeout_sec,
+            workdir=ctx.workdir,
+        )
+        return outcome.reward, outcome_to_details(outcome, artifact)
 
     async def run_noop(self, spec: EnvSpec, sandbox: Any) -> tuple[float, dict[str, Any]]:
-        raise RuntimeSandboxError("HUD Tier 1 no-op execution is scheduled for Stage 6 M4.")
+        ctx = coerce_grading_context(sandbox)
+        outcome, artifact = await ctx.grader.execute_and_grade(
+            spec,
+            ctx.run_id,
+            agent_cmd=["true"],
+            timeout_sec=ctx.timeout_sec,
+            workdir=ctx.workdir,
+        )
+        return outcome.reward, outcome_to_details(outcome, artifact)

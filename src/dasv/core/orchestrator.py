@@ -44,7 +44,12 @@ from dasv.sandbox.docker_provider import DockerSandboxProvider
 from dasv.sandbox.janitor import ContainerJanitor, ReapReport
 from dasv.sandbox.probes import run_runtime_boundary_probes, run_tier0_static_probes
 from dasv.sandbox.provider import ContainerConfig, SandboxProvider
-from dasv.verifier.clean_grader import CleanImageGrader, GradingContext, ensure_container_image
+from dasv.verifier.clean_grader import (
+    CleanImageGrader,
+    GradingContext,
+    ensure_container_image,
+    find_env_dockerfile,
+)
 from dasv.verifier.determinism import DeterminismRunner
 
 logger = logging.getLogger(__name__)
@@ -194,7 +199,38 @@ class TieredAuditOrchestrator:
         self,
         ctx: AuditContext,
         oci_digests: dict[str, str],
-    ) -> tuple[list[AuditFinding], DeterminismMetrics, bool, str | None, float | None]:
+    ) -> tuple[list[AuditFinding], DeterminismMetrics | None, bool, str | None, float | None]:
+        has_container_target = bool(
+            ctx.env_spec.image_ref
+            or ctx.env_spec.image_digest
+            or find_env_dockerfile(ctx.env_spec) is not None
+        )
+        if not has_container_target:
+            return (
+                [
+                    AuditFinding(
+                        rule_id="RULE-ADPT-002",
+                        title="Non-containerized environment: Tier 1 Docker checks skipped",
+                        severity=Severity.INFO,
+                        tier=1,
+                        source="dasv",
+                        evidence=(
+                            f"Environment '{ctx.env_spec.task_id}' ({ctx.env_spec.standard.value}) "
+                            "declares neither a container image nor a Dockerfile; Tier 1 runtime "
+                            "container probes and clean-image replays are not applicable."
+                        ),
+                        remediation=(
+                            "Use `dasv rubric` / Tier 2 for pure-Python rubric packages, or add "
+                            "a pinned Dockerfile/image to enable Tier 1 clean-image isolation."
+                        ),
+                    )
+                ],
+                None,
+                True,
+                None,
+                None,
+            )
+
         provider: SandboxProvider = ctx.provider or DockerSandboxProvider(janitor=ctx.janitor)
         health = await provider.health_check()
         if not health.healthy:
@@ -510,18 +546,20 @@ class TieredAuditOrchestrator:
 
     @staticmethod
     def _deferred_tier_finding(tier_num: int) -> AuditFinding:
-        milestone = "M2" if tier_num == 2 else "M2/M3"
         return AuditFinding(
-            rule_id="RULE-STAGE-001",
-            title=f"Tier {tier_num} runner scheduled for Stage 6 ({milestone})",
+            rule_id="RULE-ORCH-002",
+            title=f"Tier {tier_num} hook not configured for this run",
             severity=Severity.INFO,
             tier=0,
             source="dasv",
             evidence=(
-                f"Tier {tier_num} execution requires Stage 6 {milestone} LLM/signal runners; "
+                f"Tier {tier_num} was requested without an attached tier{tier_num}_hook; "
                 "completed lower tiers were preserved."
             ),
-            remediation="Run with `--tiers 0,1` for v0.1 checks or enable Tier 2/3 in M2/M3.",
+            remediation=(
+                "Use `dasv audit --tiers ...` via CLI or pass `tier2_hook`/`tier3_hook` "
+                "to `TieredAuditOrchestrator`."
+            ),
         )
 
     @staticmethod

@@ -191,3 +191,86 @@ async def test_native_delegate_exit_codes_timeout_and_env_scrub(
     )
     assert timeout_res.exit_code is None
     assert timeout_res.findings[0].rule_id == "RULE-NATIVE-002"
+
+
+async def test_verifiers_v1_and_hud_container_oracle_noop_and_non_container_tier1(
+    minimal_verifiers_v1: Path,
+    tmp_path: Path,
+) -> None:
+    """Commit A1: verifiers_v1 & HUD support clean-image oracle/noop & pure-Python T1 advisory."""
+    from dasv.adapters.hud import HudAdapter
+    from dasv.adapters.verifiers_v1 import VerifiersV1Adapter
+    from dasv.core.config import DasvConfig
+    from dasv.core.errors import EXIT_PASS
+    from dasv.core.orchestrator import AuditContext, TieredAuditOrchestrator
+    from dasv.sandbox.provider import ExecResult, SandboxHandle
+    from dasv.verifier import CleanImageGrader, GradingContext
+    from tests.conftest import FakeSandboxProvider
+
+    # 1. Pure-Python verifiers_v1 (no image / no Dockerfile) skips Tier 1 with RULE-ADPT-002 INFO
+    vf_adapter = VerifiersV1Adapter()
+    vf_spec = vf_adapter.load(minimal_verifiers_v1)
+    ctx = AuditContext.create(
+        config=DasvConfig(),
+        adapter=vf_adapter,
+        env_spec=vf_spec,
+        native=False,
+    )
+    res = await TieredAuditOrchestrator().execute(ctx, {0, 1})
+    assert res.exit_code == EXIT_PASS
+    assert any(
+        f.rule_id == "RULE-ADPT-002" and f.severity == Severity.INFO for f in res.report.findings
+    )
+
+    # 2. Containerized HUD env with image + solution/solve.sh executes clean-image oracle & noop
+    hud_dir = tmp_path / "hud_container_env"
+    (hud_dir / "solution").mkdir(parents=True)
+    (hud_dir / "tests").mkdir()
+    (hud_dir / "hud.toml").write_text(
+        'name = "hud-demo"\nimage = "python:3.12-slim"\nnetwork_mode = "no-network"\n',
+        encoding="utf-8",
+    )
+    (hud_dir / "solution" / "solve.sh").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+    (hud_dir / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    hud_adapter = HudAdapter()
+    hud_spec = hud_adapter.load(hud_dir)
+    assert hud_spec.has_oracle is True
+    assert hud_spec.oracle_entrypoint == "solution/solve.sh"
+
+    state: dict[str, bool] = {"ran_oracle": False}
+
+    def fake_exec(
+        handle: SandboxHandle, cmd: list[str], timeout_sec: float, workdir: str | None
+    ) -> ExecResult:
+        _ = (timeout_sec, workdir)
+        joined = " ".join(cmd)
+        if handle.plane == "execution":
+            if "dasv_ep_" in joined:
+                state["ran_oracle"] = True
+            if cmd[:2] == ["git", "diff"] and state["ran_oracle"]:
+                state["ran_oracle"] = False
+                return ExecResult(
+                    exit_code=0,
+                    stdout=(
+                        "diff --git a/app.py b/app.py\n"
+                        "--- a/app.py\n"
+                        "+++ b/app.py\n"
+                        "@@ -1 +1 @@\n-0\n+1\n"
+                    ),
+                    stderr="",
+                    duration_ms=2.0,
+                )
+            return ExecResult(exit_code=0, stdout="", stderr="", duration_ms=1.0)
+        if "git', 'apply'" in joined:
+            state[handle.container_id] = True
+            return ExecResult(exit_code=0, stdout="", stderr="", duration_ms=1.0)
+        ok = state.get(handle.container_id, False)
+        return ExecResult(exit_code=0 if ok else 1, stdout="", stderr="", duration_ms=1.0)
+
+    provider = FakeSandboxProvider(exec_handler=fake_exec)
+    gctx = GradingContext(CleanImageGrader(provider), run_id="hud-t1")
+    o_reward, _ = await hud_adapter.run_oracle(hud_spec, gctx)
+    n_reward, _ = await hud_adapter.run_noop(hud_spec, gctx)
+    assert o_reward == 1.0
+    assert n_reward == 0.0

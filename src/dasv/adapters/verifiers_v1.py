@@ -12,6 +12,7 @@ from dasv.adapters.base import AdapterCapabilities
 from dasv.adapters.native import NativeDelegateRunner
 from dasv.core.errors import ConfigError, RuntimeSandboxError
 from dasv.core.schemas import AuditFinding, EnvSpec, EnvStandard, Severity
+from dasv.verifier.clean_grader import coerce_grading_context, outcome_to_details
 
 _LEGACY_V0_SYMBOLS = {"SingleTurnEnv", "MultiTurnEnv", "ToolEnv", "CodeEnv"}
 _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "build", "dist"}
@@ -171,15 +172,41 @@ class VerifiersV1Adapter:
 
         legacy_v0_only = summary.has_legacy_v0 and not summary.has_v1_taskset
 
+        tool_tbl = pyproject.get("tool")
+        vf_raw = (
+            cast(dict[str, Any], tool_tbl).get("verifiers") if isinstance(tool_tbl, dict) else None
+        )
+        vf_tbl: dict[str, Any] = cast(dict[str, Any], vf_raw) if isinstance(vf_raw, dict) else {}
+        explicit_image = (
+            str(vf_tbl["image"]).strip()
+            if isinstance(vf_tbl.get("image"), str) and vf_tbl["image"].strip()
+            else None
+        )
+        dockerfile = path / "environment" / "Dockerfile"
+        if not dockerfile.is_file():
+            dockerfile = path / "Dockerfile"
+        dockerfile_rel = dockerfile.relative_to(path).as_posix() if dockerfile.is_file() else None
+        image_digest: str | None = None
+        if explicit_image and "@sha256:" in explicit_image:
+            image_digest = "sha256:" + explicit_image.split("@sha256:", 1)[1]
+
+        oracle_entrypoint: str | None = None
+        configured_oracle = vf_tbl.get("oracle_entrypoint")
+        if isinstance(configured_oracle, str) and configured_oracle.strip():
+            oracle_entrypoint = configured_oracle.strip()
+        elif (path / "solution" / "solve.sh").is_file():
+            oracle_entrypoint = "solution/solve.sh"
+        has_oracle = oracle_entrypoint is not None and (path / oracle_entrypoint).exists()
+
         return EnvSpec(
             task_id=task_id,
             standard=EnvStandard.VERIFIERS_V1,
             root_path=path.resolve(),
             instruction_text=instruction_text,
-            image_ref=None,
-            image_digest=None,
-            has_oracle=False,
-            oracle_entrypoint=None,
+            image_ref=explicit_image,
+            image_digest=image_digest,
+            has_oracle=has_oracle,
+            oracle_entrypoint=oracle_entrypoint,
             verifier_paths=summary.verifier_files,
             rubric_type=rubric_type,
             metadata={
@@ -188,6 +215,8 @@ class VerifiersV1Adapter:
                 "legacy_v0_detected": legacy_v0_only,
                 "legacy_v0_files": summary.legacy_v0_files,
                 "rubric_classes": sorted(summary.rubric_classes),
+                "image_explicit": explicit_image is not None,
+                "dockerfile_path": dockerfile_rel,
             },
         )
 
@@ -235,11 +264,38 @@ class VerifiersV1Adapter:
         return result.findings
 
     async def run_oracle(self, spec: EnvSpec, sandbox: Any) -> tuple[float, dict[str, Any]]:
-        raise RuntimeSandboxError(
-            "verifiers v1 Tier 1 oracle execution is scheduled for Stage 6 M1."
+        if not spec.has_oracle or not spec.oracle_entrypoint:
+            raise RuntimeSandboxError(
+                f"verifiers v1 task '{spec.task_id}' does not declare an existing "
+                "oracle_entrypoint (set [tool.verifiers].oracle_entrypoint or solution/solve.sh)."
+            )
+        oracle_path = (spec.root_path / spec.oracle_entrypoint).resolve()
+        try:
+            oracle_path.relative_to(spec.root_path.resolve())
+        except ValueError as exc:
+            raise RuntimeSandboxError(
+                f"Oracle entrypoint '{spec.oracle_entrypoint}' escapes task root."
+            ) from exc
+        if not oracle_path.is_file():
+            raise RuntimeSandboxError(f"Oracle script not found: {oracle_path}")
+
+        ctx = coerce_grading_context(sandbox)
+        outcome, artifact = await ctx.grader.execute_and_grade(
+            spec,
+            ctx.run_id,
+            script_bytes=oracle_path.read_bytes(),
+            timeout_sec=ctx.timeout_sec,
+            workdir=ctx.workdir,
         )
+        return outcome.reward, outcome_to_details(outcome, artifact)
 
     async def run_noop(self, spec: EnvSpec, sandbox: Any) -> tuple[float, dict[str, Any]]:
-        raise RuntimeSandboxError(
-            "verifiers v1 Tier 1 no-op execution is scheduled for Stage 6 M1."
+        ctx = coerce_grading_context(sandbox)
+        outcome, artifact = await ctx.grader.execute_and_grade(
+            spec,
+            ctx.run_id,
+            agent_cmd=["true"],
+            timeout_sec=ctx.timeout_sec,
+            workdir=ctx.workdir,
         )
+        return outcome.reward, outcome_to_details(outcome, artifact)
