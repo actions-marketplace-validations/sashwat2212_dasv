@@ -20,6 +20,7 @@ from dasv.core.errors import (
     EXIT_PASS,
     EXIT_RUNTIME_ERROR,
     BudgetExceededError,
+    ConfigError,
 )
 from dasv.core.orchestrator import AuditContext, TieredAuditOrchestrator
 from dasv.core.schemas import AuditReport, CurriculumBucket, EnvSpec, EnvStandard
@@ -327,3 +328,112 @@ def test_cli_profile_and_audit_tier3_with_traces_and_errors(
     res_no_docker = runner.invoke(app, ["profile", str(hardened_harbor_env)])
     assert res_no_docker.exit_code == EXIT_RUNTIME_ERROR
     _ = EXIT_BUDGET_EXCEEDED
+
+
+async def test_signal_profiler_traces_mismatch_partial_and_dir_alias(tmp_path: Path) -> None:
+    """Commit 7: --traces fails loudly on unmatched IDs and accepts root directory name alias."""
+    env_a = tmp_path / "01_calc_dir"
+    env_b = tmp_path / "02_parser_dir"
+    env_a.mkdir()
+    env_b.mkdir()
+    spec_a = EnvSpec(
+        task_id="hardened-calculator-ctrl",
+        standard=EnvStandard.HARBOR,
+        root_path=env_a,
+        instruction_text="Calc",
+    )
+    spec_b = EnvSpec(
+        task_id="hardened-parser-ctrl",
+        standard=EnvStandard.HARBOR,
+        root_path=env_b,
+        instruction_text="Parser",
+    )
+
+    live_called = False
+
+    async def should_never_run(s: EnvSpec, rollout_idx: int, model: str, run_id: str) -> float:
+        nonlocal live_called
+        _ = (s, rollout_idx, model, run_id)
+        live_called = True
+        return 1.0
+
+    profiler = SignalProfiler(rollout_evaluator=should_never_run)
+
+    # 1. Completely unmatched ID raises ConfigError listing unmatched & available IDs
+    with pytest.raises(ConfigError) as exc_info:
+        await profiler.profile_specs(
+            [spec_a],
+            base_model="local",
+            rollouts_g=4,
+            traces_by_task={"wrong-id": [1.0, 0.0, 0.0, 0.0]},
+        )
+    msg = str(exc_info.value)
+    assert "hardened-calculator-ctrl" in msg
+    assert "01_calc_dir" in msg
+    assert "wrong-id" in msg
+    assert live_called is False
+
+    # 2. Partial match across a taskset still fails loudly without calling live rollouts
+    with pytest.raises(ConfigError) as partial_exc:
+        await profiler.profile_specs(
+            [spec_a, spec_b],
+            base_model="local",
+            rollouts_g=4,
+            traces_by_task={"hardened-calculator-ctrl": [1.0, 0.0, 0.0, 0.0]},
+        )
+    assert "hardened-parser-ctrl" in str(partial_exc.value)
+    assert "hardened-calculator-ctrl" in str(partial_exc.value)
+    assert live_called is False
+
+    # 3. Documented directory-name alias resolves cleanly without falling through
+    report = await profiler.profile_specs(
+        [spec_a],
+        base_model="local",
+        rollouts_g=4,
+        traces_by_task={"01_calc_dir": [1.0, 0.0, 0.0, 0.0]},
+    )
+    assert live_called is False
+    assert len(report.tasks) == 1
+    assert report.tasks[0].task_id == "hardened-calculator-ctrl"
+    assert report.tasks[0].pass_at_1 == pytest.approx(0.25)
+
+
+def test_cli_profile_and_audit_tier3_unmatched_traces_fail_loudly(
+    hardened_harbor_env: Path,
+    tmp_path: Path,
+) -> None:
+    """Commit 7: CLI profile & audit --tiers 0,3 exit 2 on trace ID mismatch with no Grade A."""
+    bad_traces = tmp_path / "wrong_traces.jsonl"
+    bad_traces.write_text(
+        json.dumps({"task_id": "totally-different-task", "reward": 1.0}) + "\n",
+        encoding="utf-8",
+    )
+
+    res_prof = runner.invoke(
+        app,
+        ["profile", str(hardened_harbor_env), "--traces", str(bad_traces)],
+    )
+    assert res_prof.exit_code == EXIT_CONFIG_ERROR, res_prof.stdout + res_prof.stderr
+    assert "hardened-calculator" in res_prof.stderr
+    assert "totally-different-task" in res_prof.stderr
+    assert "LLMClient" not in res_prof.stderr
+
+    html_out = tmp_path / "aborted_t3.html"
+    res_audit = runner.invoke(
+        app,
+        [
+            "audit",
+            str(hardened_harbor_env),
+            "--tiers",
+            "0,3",
+            "--no-native",
+            "--traces",
+            str(bad_traces),
+            "--html",
+            str(html_out),
+        ],
+    )
+    assert res_audit.exit_code == EXIT_CONFIG_ERROR, res_audit.stdout + res_audit.stderr
+    assert "Grade A" not in res_audit.stdout
+    assert "hardened-calculator" in res_audit.stderr
+    assert not html_out.exists()

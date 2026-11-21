@@ -484,7 +484,7 @@ class TieredAuditOrchestrator:
                 report,
                 out_dir=ctx.out_dir,
                 sarif_path=sarif_path,
-                html_path=html_path,
+                html_path=html_path if (fatal_error is None or budget_exceeded) else None,
             )
 
         if budget_exceeded:

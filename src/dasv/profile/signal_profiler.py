@@ -263,6 +263,43 @@ def load_rewards_from_traces_jsonl(traces_path: Path) -> dict[str, list[float]]:
     return grouped
 
 
+def _resolve_trace_rewards(
+    spec: EnvSpec,
+    traces_by_task: dict[str, list[float]],
+) -> list[float] | None:
+    """Resolve trace rewards by exact `spec.task_id` or root directory name alias."""
+    if spec.task_id in traces_by_task:
+        return traces_by_task[spec.task_id]
+    dir_alias = spec.root_path.name
+    if dir_alias and dir_alias in traces_by_task:
+        return traces_by_task[dir_alias]
+    return None
+
+
+def _validate_traces_coverage(
+    specs: Sequence[EnvSpec],
+    traces_by_task: dict[str, list[float]],
+) -> None:
+    """Ensure every target EnvSpec matches a trace record when `--traces` is supplied."""
+    unmatched: list[str] = []
+    for spec in specs:
+        if _resolve_trace_rewards(spec, traces_by_task) is None:
+            dir_name = spec.root_path.name
+            label = (
+                f"{spec.task_id} (dir: {dir_name})"
+                if dir_name and dir_name != spec.task_id
+                else spec.task_id
+            )
+            unmatched.append(label)
+    if unmatched:
+        available = ", ".join(sorted(traces_by_task.keys())) or "<none>"
+        raise ConfigError(
+            f"Traces file has no matching records for task(s): {', '.join(unmatched)}. "
+            f"Found task_id(s) in traces: [{available}]. "
+            "Match `task_id` to the task manifest name (or directory name) and retry."
+        )
+
+
 def _artifact_from_policy_response(spec: EnvSpec, content: str) -> ExtractedArtifact:
     """Convert a policy completion (unified diff or fenced code block) to ExtractedArtifact."""
     diff_text = extract_unified_diff(content)
@@ -425,10 +462,15 @@ class SignalProfiler:
         findings: list[AuditFinding] = []
         budget_tripped = False
 
+        if traces_by_task is not None:
+            _validate_traces_coverage(specs, traces_by_task)
+
         for task_idx, spec in enumerate(specs, start=1):
             rewards: list[float] = []
-            if traces_by_task is not None and spec.task_id in traces_by_task:
-                rewards = list(traces_by_task[spec.task_id][:rollouts_g])
+            if traces_by_task is not None:
+                matched_rewards = _resolve_trace_rewards(spec, traces_by_task)
+                assert matched_rewards is not None
+                rewards = list(matched_rewards[:rollouts_g])
             else:
                 effective_spec = spec
                 if self._rollout_evaluator is None and self._provider is not None:

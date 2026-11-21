@@ -432,8 +432,11 @@ def audit(
     if result.error_message:
         typer.echo(f"Error: {result.error_message}", err=True)
 
-    # Do not render a misleading Grade badge when runtime/native setup aborted the audit.
-    if result.exit_code in {EXIT_RUNTIME_ERROR, EXIT_NATIVE_ERROR} or result.aborted_by_signal:
+    # Do not render a misleading Grade badge when config/runtime/native errors aborted the audit.
+    if (
+        result.exit_code in {EXIT_CONFIG_ERROR, EXIT_RUNTIME_ERROR, EXIT_NATIVE_ERROR}
+        or result.aborted_by_signal
+    ):
         raise typer.Exit(code=result.exit_code)
 
     rep = result.report
