@@ -7,7 +7,7 @@ on:
 
 jobs:
   verify:
-    name: Lint, Typecheck & Test (ubuntu-latest)
+    name: Lint, Typecheck, Test & Wheel Smoke (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -31,10 +31,30 @@ jobs:
       - name: Pyright strict typecheck
         run: uv run pyright
 
-      - name: Unit tests
+      - name: Full test suite (unit, adversarial, live Docker E2E)
         run: uv run pytest -v
 
       - name: CLI smoke check
         run: |
           uv run dasv --version
           uv run dasv doctor
+
+      - name: Build wheel & out-of-tree /tmp smoke test
+        run: |
+          uv build
+          WHEEL="$(ls dist/dasv-*.whl | head -n 1)"
+          SMOKE_DIR="/tmp/dasv-wheel-smoke"
+          rm -rf "${SMOKE_DIR}"
+          mkdir -p "${SMOKE_DIR}"
+          cp -R benchmarks/planted_vulns/hardened/01_hardened_calculator "${SMOKE_DIR}/env"
+          cd /tmp
+          uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" dasv --version
+          uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" dasv doctor
+          uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" dasv inspect "${SMOKE_DIR}/env"
+          uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" dasv audit "${SMOKE_DIR}/env" \
+            --tiers 0 --no-native \
+            --out-dir "${SMOKE_DIR}/out" \
+            --sarif "${SMOKE_DIR}/out/report.sarif" \
+            --html "${SMOKE_DIR}/out/report.html"
+          test -s "${SMOKE_DIR}/out/report.sarif"
+          test -s "${SMOKE_DIR}/out/report.html"

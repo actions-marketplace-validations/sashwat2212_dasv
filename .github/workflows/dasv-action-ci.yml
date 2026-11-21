@@ -1,0 +1,37 @@
+name: dasv-action Self-Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  dasv-action-gate:
+    name: Verify dasv-action on Hardened Reference Env
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run dasv-action (Tier 0 + SARIF + Offline HTML)
+        id: dasv
+        uses: ./action
+        with:
+          path: benchmarks/planted_vulns/hardened/01_hardened_calculator
+          tiers: "0"
+          native: "false"
+          fail-on: high
+          dasv-package: "."
+          upload-sarif: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          upload-html-artifact: "true"
+
+      - name: Assert Grade A output
+        run: |
+          echo "Grade=${{ steps.dasv.outputs.grade }} Score=${{ steps.dasv.outputs.hackability-score }}"
+          test "${{ steps.dasv.outputs.grade }}" = "A"

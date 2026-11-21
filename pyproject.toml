@@ -41,11 +41,17 @@ dependencies = [
 [project.optional-dependencies]
 recipes = [
     "torch>=2.3",
-    "trl>=0.15",
+    "trl>=0.22",
     "peft>=0.13",
     "datasets>=3.0",
     "accelerate>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/sashwat2212/dasv"
+Repository = "https://github.com/sashwat2212/dasv"
+Documentation = "https://github.com/sashwat2212/dasv/tree/main/docs"
+Issues = "https://github.com/sashwat2212/dasv/issues"
 
 [dependency-groups]
 dev = [
@@ -90,3 +96,9 @@ testpaths = ["tests"]
 markers = [
     "docker: integration tests that require a running Docker daemon",
 ]
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true

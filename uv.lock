@@ -209,7 +209,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.7" },
     { name = "torch", marker = "extra == 'recipes'", specifier = ">=2.3" },
-    { name = "trl", marker = "extra == 'recipes'", specifier = ">=0.15" },
+    { name = "trl", marker = "extra == 'recipes'", specifier = ">=0.22" },
     { name = "typer", specifier = ">=0.12" },
 ]
 provides-extras = ["recipes"]
