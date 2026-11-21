@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 CONFIG_PATH="${1:-${SCRIPT_DIR}/config.yaml}"
 MODE="${2:---dry-run}"
+SEED="${SEED:-42}"
+GRADING_BACKEND="${GRADING_BACKEND:-hardened-subprocess}"
+TASKSET_DIR="${TASKSET_DIR:-${REPO_ROOT}/experiments/taskset_v1}"
+OUT_BASE="${OUT_BASE:-${REPO_ROOT}/experiments/v1_ablation/seed_${SEED}}"
 
 echo "[dasv-ablation] Validating LoRA Without Regret + Dr. GRPO guardrails: ${CONFIG_PATH}"
 uv --directory "${REPO_ROOT}" run python -c "
@@ -15,11 +19,64 @@ print(f'VALIDATED: model={cfg.model.base_model} r={cfg.lora.r} lr={cfg.optimizer
 "
 
 if [ "${MODE}" = "--dry-run" ]; then
-  echo "[dasv-ablation] Dry-run complete (\$0 GPU spend). Pass '--launch' on a 24GB GPU node (L4/4090/A10G) with optional 'recipes' extras installed."
+  DRY_DIR="${REPO_ROOT}/experiments/dry_run_check"
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/prepare_taskset.py" \
+    --source synthetic --n-train 12 --n-heldout 8 --seed "${SEED}" --out-dir "${DRY_DIR}/taskset"
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/train_dr_grpo.py" \
+    --config "${CONFIG_PATH}" --taskset-dir "${DRY_DIR}/taskset" \
+    --out-dir "${DRY_DIR}/arm2" --arm arm2 --seed "${SEED}" --dry-run
+  echo "[dasv-ablation] Dry-run complete (\$0 GPU spend). Pass '--smoke' or '--launch' on a 24GB GPU VM."
   exit 0
 fi
 
-echo "[dasv-ablation] Launching 3-arm ablation (Arm 0 Base, Arm 1 Unhardened, Arm 2 dasv-Hardened)..."
-echo "Install optional GPU extras first: uv sync --extra recipes"
-echo "Wire TRL GRPOTrainer to exported trl_dataset.jsonl + trl_reward_func.py and LogprobDriftTracker."
+if [ ! -f "${TASKSET_DIR}/taskset_manifest.json" ]; then
+  echo "[dasv-ablation] Preparing BigCodeBench + MBPP+ Harbor taskset -> ${TASKSET_DIR}"
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/prepare_taskset.py" \
+    --source hf --n-train 128 --n-heldout 64 --seed "${SEED}" --out-dir "${TASKSET_DIR}"
+fi
 
+if [ "${MODE}" = "--smoke" ]; then
+  SMOKE_OUT="${REPO_ROOT}/experiments/smoke_gate_seed_${SEED}"
+  echo "[dasv-ablation] Running Mandatory Pre-Spend Smoke Gate (Arm 0 Base + 10-step Arm 1 & Arm 2)"
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/train_dr_grpo.py" \
+    --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${SMOKE_OUT}/arm0" \
+    --arm arm0 --eval-k 1 --seed "${SEED}" --grading-backend "${GRADING_BACKEND}"
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/train_dr_grpo.py" \
+    --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${SMOKE_OUT}/arm1" \
+    --arm arm1 --max-steps 10 --eval-every 10 --quick-eval-every 0 --eval-k 1 \
+    --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 25
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/train_dr_grpo.py" \
+    --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${SMOKE_OUT}/arm2" \
+    --arm arm2 --max-steps 10 --eval-every 10 --quick-eval-every 0 --eval-k 1 \
+    --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 25
+  echo "[dasv-ablation] Smoke gate finished. Inspect ${SMOKE_OUT}/*.json before running '--launch'."
+  exit 0
+fi
+
+if [ "${MODE}" = "--launch" ]; then
+  echo "[dasv-ablation] Launching Full 3-Arm Controlled Ablation (seed=${SEED}, backend=${GRADING_BACKEND})..."
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/train_dr_grpo.py" \
+    --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${OUT_BASE}/arm0" \
+    --arm arm0 --eval-k 4 --seed "${SEED}" --grading-backend "${GRADING_BACKEND}"
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/train_dr_grpo.py" \
+    --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${OUT_BASE}/arm1" \
+    --arm arm1 --max-steps 200 --eval-every 50 --quick-eval-every 25 --eval-k 4 \
+    --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 180
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/train_dr_grpo.py" \
+    --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${OUT_BASE}/arm2" \
+    --arm arm2 --max-steps 200 --eval-every 50 --quick-eval-every 25 --eval-k 4 \
+    --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 180
+  uv --directory "${REPO_ROOT}" run python "${SCRIPT_DIR}/plot_ablation.py" \
+    --arm0 "${OUT_BASE}/arm0/manifest.json" \
+    --arm1 "${OUT_BASE}/arm1/metrics.jsonl" \
+    --arm2 "${OUT_BASE}/arm2/metrics.jsonl" \
+    --arm1-eval "${OUT_BASE}/arm1/heldout_eval.jsonl" \
+    --arm2-eval "${OUT_BASE}/arm2/heldout_eval.jsonl" \
+    --out "${OUT_BASE}/ablation_comparison.html" \
+    --svg-dir "${OUT_BASE}/svgs"
+  echo "[dasv-ablation] Full 3-arm ablation complete -> ${OUT_BASE}/ablation_comparison.html"
+  exit 0
+fi
+
+echo "Unknown mode '${MODE}'. Expected --dry-run, --smoke, or --launch." >&2
+exit 2
