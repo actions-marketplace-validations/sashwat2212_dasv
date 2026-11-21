@@ -36,11 +36,18 @@ class BudgetSnapshot(BaseModel):
 DEFAULT_PRICING_TABLE: dict[str, ModelPricing] = {
     "openai/gpt-4o-mini": ModelPricing(input_per_1m_usd=0.15, output_per_1m_usd=0.60),
     "gpt-4o-mini": ModelPricing(input_per_1m_usd=0.15, output_per_1m_usd=0.60),
+    "openai/gpt-4.1-mini": ModelPricing(input_per_1m_usd=0.40, output_per_1m_usd=1.60),
+    "gpt-4.1-mini": ModelPricing(input_per_1m_usd=0.40, output_per_1m_usd=1.60),
     "openai/gpt-4o": ModelPricing(input_per_1m_usd=2.50, output_per_1m_usd=10.00),
     "gpt-4o": ModelPricing(input_per_1m_usd=2.50, output_per_1m_usd=10.00),
     "anthropic/claude-3-5-haiku": ModelPricing(input_per_1m_usd=0.80, output_per_1m_usd=4.00),
+    "claude-3-5-haiku": ModelPricing(input_per_1m_usd=0.80, output_per_1m_usd=4.00),
     "deepseek/deepseek-chat": ModelPricing(input_per_1m_usd=0.27, output_per_1m_usd=1.10),
+    "deepseek-chat": ModelPricing(input_per_1m_usd=0.27, output_per_1m_usd=1.10),
     "google/gemini-2.5-flash": ModelPricing(input_per_1m_usd=0.15, output_per_1m_usd=0.60),
+    "gemini-2.5-flash": ModelPricing(input_per_1m_usd=0.15, output_per_1m_usd=0.60),
+    "google/gemini-2.5-flash-lite": ModelPricing(input_per_1m_usd=0.10, output_per_1m_usd=0.40),
+    "gemini-2.5-flash-lite": ModelPricing(input_per_1m_usd=0.10, output_per_1m_usd=0.40),
 }
 
 _ZERO_PRICING = ModelPricing(input_per_1m_usd=0.0, output_per_1m_usd=0.0)
@@ -95,6 +102,9 @@ class BudgetGuard:
         )
         if local:
             return _ZERO_PRICING, True
+
+        if model.strip().lower().endswith(":free"):
+            return _ZERO_PRICING, False
 
         pricing = self._pricing_table.get(model)
         if pricing is None and "/" in model:

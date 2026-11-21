@@ -102,3 +102,20 @@ async def test_unknown_cloud_model_raises_config_error_unless_opted_in() -> None
     )
     handle = await permissive_guard.reserve_or_raise("mystery/model-x", 100, 100)
     assert handle.reserved_cost_usd == 0.0
+
+
+async def test_budget_guard_pricing_aliases_and_openrouter_free_tier() -> None:
+    guard = BudgetGuard(
+        max_cost_usd=2.0,
+        max_tokens=100_000,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    for model_id in ("gemini-2.5-flash", "deepseek-chat", "claude-3-5-haiku", "gpt-4.1-mini"):
+        h = await guard.reserve_or_raise(model_id, 1_000, 1_000)
+        assert h.reserved_cost_usd > 0.0
+        await guard.release(h)
+
+    free_h = await guard.reserve_or_raise("qwen/qwen-2.5-coder-32b-instruct:free", 2_000, 1_000)
+    assert free_h.reserved_cost_usd == 0.0
+    assert free_h.reserved_tokens == 3_000
+    await guard.release(free_h)

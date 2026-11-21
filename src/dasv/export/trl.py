@@ -32,32 +32,67 @@ class TRLDatasetRow(BaseModel):
     sampler_weight: float
 
 
-_TRL_REWARD_WRAPPER_TEMPLATE = '''"""TRL reward_func delegating to dasv CleanImageGrader."""
+_TRL_REWARD_WRAPPER_TEMPLATE = '''"""Concurrent cached TRL CleanImageGrader reward_func."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from dasv.adapters.registry import AdapterRegistry
+from dasv.core.schemas import EnvSpec
 from dasv.profile.signal_profiler import _artifact_from_policy_response
 from dasv.sandbox.docker_provider import DockerSandboxProvider
 from dasv.sandbox.janitor import ContainerJanitor
 from dasv.verifier.clean_grader import CleanImageGrader, ensure_container_image
 
+_SPEC_CACHE: dict[str, EnvSpec] = {}
 
-async def _grade_completion(root_path: str, completion_text: str, run_id: str) -> float:
-    path = Path(root_path)
+
+async def _ensure_cached_spec(
+    root_path: str,
+    provider: DockerSandboxProvider,
+    run_id: str,
+) -> EnvSpec:
+    resolved = str(Path(root_path).resolve())
+    cached = _SPEC_CACHE.get(resolved)
+    if cached is not None:
+        return cached
+    path = Path(resolved)
     adapter = AdapterRegistry().resolve(path)
     spec = adapter.load(path)
+    built = await ensure_container_image(spec, provider, f"{run_id}-img")
+    _SPEC_CACHE[resolved] = built
+    return built
+
+
+async def _grade_batch(
+    pairs: list[tuple[str, str]],
+    *,
+    max_concurrent: int,
+) -> list[float]:
     janitor = ContainerJanitor()
     provider = DockerSandboxProvider(janitor=janitor)
+    grader = CleanImageGrader(provider)
+    run_id = f"dasv-trl-{uuid4().hex[:8]}"
+    sem = asyncio.Semaphore(max(1, max_concurrent))
+
+    async def _grade_one(idx: int, env_root: str, text: str) -> float:
+        async with sem:
+            built_spec = await _ensure_cached_spec(env_root, provider, run_id)
+            artifact = _artifact_from_policy_response(built_spec, text)
+            outcome = await grader.grade(built_spec, artifact, f"{run_id}-g{idx}")
+            return float(outcome.reward)
+
     try:
-        built_spec = await ensure_container_image(spec, provider, run_id)
-        artifact = _artifact_from_policy_response(built_spec, completion_text)
-        outcome = await CleanImageGrader(provider).grade(built_spec, artifact, f"{run_id}-grade")
-        return float(outcome.reward)
+        tasks = [
+            asyncio.create_task(_grade_one(idx, env_root, text))
+            for idx, (env_root, text) in enumerate(pairs)
+        ]
+        return list(await asyncio.gather(*tasks))
     finally:
         await janitor.reap_all(run_id)
 
@@ -69,14 +104,15 @@ def dasv_clean_image_reward_func(
 ) -> list[float]:
     """TRL GRPOTrainer reward function enforcing clean-image out-of-container verification."""
     _ = kwargs
-    rewards: list[float] = []
-    for idx, (comp, env_root) in enumerate(zip(completions, root_path, strict=True)):
+    max_concurrent = int(os.environ.get("DASV_TRL_MAX_CONCURRENT", "4"))
+    pairs: list[tuple[str, str]] = []
+    for comp, env_root in zip(completions, root_path, strict=True):
         if isinstance(comp, list) and comp and isinstance(comp[-1], dict):
             text = str(comp[-1].get("content", ""))
         else:
             text = str(comp)
-        rewards.append(asyncio.run(_grade_completion(env_root, text, f"dasv-trl-{idx}")))
-    return rewards
+        pairs.append((env_root, text))
+    return asyncio.run(_grade_batch(pairs, max_concurrent=max_concurrent))
 '''
 
 
