@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import inspect
 import json
 import math
@@ -32,7 +33,6 @@ import random
 import re
 import resource
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -219,17 +219,22 @@ def extract_naive_files(completion: str) -> dict[str, bytes]:
     return files
 
 
+@functools.lru_cache(maxsize=1)
 def _can_nobody_exec(executable: str) -> bool:
-    """Return True if UID 65534 (nobody) can traverse both symlink and resolved paths."""
+    """Empirically probe whether UID 65534 (nobody) can execute `executable -m pytest`."""
+    if platform.system() != "Linux" or os.geteuid() != 0:
+        return False
     try:
-        raw = Path(executable)
-        for path in (raw, raw.resolve()):
-            if not (path.stat().st_mode & stat.S_IXOTH):
-                return False
-            for parent in path.parents:
-                if not (parent.stat().st_mode & stat.S_IXOTH):
-                    return False
-        return True
+        proc = subprocess.run(
+            [executable, "-c", "import pytest"],
+            cwd="/tmp",
+            env=build_scrubbed_env(),
+            capture_output=True,
+            timeout=5.0,
+            preexec_fn=_make_preexec_limits(5, 1024, drop_to_nobody=True),
+            check=False,
+        )
+        return proc.returncode == 0
     except OSError:
         return False
 
