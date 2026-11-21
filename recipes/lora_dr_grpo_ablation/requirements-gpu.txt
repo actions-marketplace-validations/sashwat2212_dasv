@@ -1,12 +1,12 @@
 # GPU Training Dependencies for dasv LoRA-RLVR Dr. GRPO Ablation
 # Target Hardware: 1x NVIDIA L4 (24 GB VRAM, Ada Lovelace) or RTX 4090 (24 GB) on Linux CUDA 12.x
 # Install after `uv sync` via:
-#   uv pip install -r recipes/lora_dr_grpo_ablation/requirements-gpu.txt
+#   uv pip install -r recipes/lora_dr_grpo_ablation/requirements-gpu.txt --torch-backend=cu128
 
-torch>=2.5.1,<2.8
+torch>=2.8.0,<2.10
 transformers>=4.49.0,<5.0
 trl>=0.22.0,<0.28
-vllm>=0.8.5
+vllm>=0.11.2,<=0.12.0
 peft>=0.14.0
 datasets>=3.2.0
 accelerate>=1.3.0

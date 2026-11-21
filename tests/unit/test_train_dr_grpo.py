@@ -20,6 +20,7 @@ from recipes.lora_dr_grpo_ablation.prepare_taskset import (
 from recipes.lora_dr_grpo_ablation.train_dr_grpo import (
     build_scrubbed_env,
     build_trl_grpo_kwargs,
+    extract_drift_tensors,
     grade_completion_subprocess,
     mcnemar_exact_p_value,
     paired_bootstrap_test,
@@ -147,7 +148,8 @@ def test_vram_safe_trl_kwargs_and_cpu_dry_run(tmp_path: Path) -> None:
     cfg = load_ablation_recipe_config(_CONFIG_PATH)
     kwargs = build_trl_grpo_kwargs(cfg, output_dir=tmp_path / "ckpt", max_steps=200, seed=42)
 
-    # Guardrail 1: decoupled micro-batch prevents 19.9 GB logits OOM
+    # Guardrail 1: BF16 policy load + decoupled micro-batch prevents 24 GB L4 OOM
+    assert kwargs["model_init_kwargs"] == {"dtype": "bfloat16", "device_map": None}
     assert kwargs["per_device_train_batch_size"] == 4
     assert kwargs["gradient_accumulation_steps"] == 8
     assert kwargs["steps_per_generation"] == 8
@@ -155,6 +157,7 @@ def test_vram_safe_trl_kwargs_and_cpu_dry_run(tmp_path: Path) -> None:
     assert kwargs["gradient_checkpointing"] is True
     assert kwargs["vllm_mode"] == "colocate"
     assert kwargs["vllm_enable_sleep_mode"] is True
+    assert kwargs["vllm_gpu_memory_utilization"] == pytest.approx(0.35)
     # Guardrail 2: Dr. GRPO + DAPO Clip-Higher + clean drift sampling params
     assert kwargs["loss_type"] == "dr_grpo"
     assert kwargs["scale_rewards"] == "none"
@@ -163,7 +166,36 @@ def test_vram_safe_trl_kwargs_and_cpu_dry_run(tmp_path: Path) -> None:
     assert kwargs["repetition_penalty"] == 1.0
     assert kwargs["top_p"] == 1.0
     assert kwargs["top_k"] == -1
-    assert kwargs["logprobs_mode"] == "processed_logprobs"
+    assert "logprobs_mode" not in kwargs
+
+    # Verify CLI fallback kwargs: bs=2 keeps 32 rollouts/step, disable_vllm sets top_k=None
+    kw_fb = build_trl_grpo_kwargs(
+        cfg,
+        output_dir=tmp_path / "ckpt_fb",
+        max_steps=10,
+        seed=42,
+        disable_vllm=True,
+        vllm_enable_sleep_mode=False,
+        per_device_train_batch_size=2,
+    )
+    assert kw_fb["per_device_train_batch_size"] == 2
+    assert kw_fb["gradient_accumulation_steps"] == 16
+    assert kw_fb["steps_per_generation"] == 16
+    assert kw_fb["vllm_enable_sleep_mode"] is False
+    assert kw_fb["top_k"] is None
+
+    # Verify TRL 0.27+ `sampling_per_token_logps` + captured policy logps drift extraction
+    tr_lp, inf_lp, msk = extract_drift_tensors(
+        {
+            "sampling_per_token_logps": [-0.5, -1.0],
+            "old_per_token_logps": None,
+            "completion_mask": [1, 1],
+        },
+        captured_policy_logps=[-0.48, -1.03],
+    )
+    assert tr_lp == [-0.48, -1.03]
+    assert inf_lp == [-0.5, -1.0]
+    assert msk == [1, 1]
 
     # Full CPU dry-run
     ts_dir = tmp_path / "taskset"

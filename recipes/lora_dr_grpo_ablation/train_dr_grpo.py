@@ -514,19 +514,31 @@ def build_trl_grpo_kwargs(
     max_steps: int,
     seed: int,
     disable_vllm: bool = False,
-    vllm_gpu_memory_utilization: float = 0.45,
+    vllm_gpu_memory_utilization: float = 0.35,
+    vllm_enable_sleep_mode: bool = True,
+    per_device_train_batch_size: int = 4,
 ) -> dict[str, Any]:
     """Build exact 24 GB VRAM-safe Dr. GRPO + DAPO + clean-logprob-drift TRL GRPOConfig args."""
+    total_rollouts = cfg.optimizer.prompts_per_step * cfg.optimizer.group_size_g
+    if per_device_train_batch_size < 1 or total_rollouts % per_device_train_batch_size != 0:
+        raise ValueError(
+            f"per_device_train_batch_size ({per_device_train_batch_size}) must divide "
+            f"total rollouts per step ({total_rollouts})."
+        )
+    grad_accum = total_rollouts // per_device_train_batch_size
     return {
         "output_dir": str(output_dir),
         "learning_rate": cfg.optimizer.learning_rate,
         "lr_scheduler_type": cfg.optimizer.scheduler,
         "warmup_ratio": cfg.optimizer.warmup_ratio,
+        # Load policy weights directly in BF16 on single GPU (saves ~5.7 GiB vs FP32 default
+        # and avoids TRL injecting device_map="auto" on 1-GPU nodes).
+        "model_init_kwargs": {"dtype": cfg.model.dtype, "device_map": None},
         # Decoupled micro-batch (4) x grad_accum (8) = 32 rollouts = 4 prompts x 8 generations
         # Prevents 19.9 GB FP32 logits OOM on 24 GB L4/4090 GPUs.
-        "per_device_train_batch_size": 4,
-        "gradient_accumulation_steps": 8,
-        "steps_per_generation": 8,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": grad_accum,
+        "steps_per_generation": grad_accum,
         "num_generations": cfg.optimizer.group_size_g,
         "max_prompt_length": 1024,
         "max_completion_length": 1024,
@@ -542,13 +554,12 @@ def build_trl_grpo_kwargs(
         # Clean sampling params so LogprobDriftTracker captures real kernel/engine mismatch
         "temperature": 0.8,
         "top_p": 1.0,
-        "top_k": -1,
+        "top_k": None if disable_vllm else -1,
         "repetition_penalty": 1.0,
-        "logprobs_mode": "processed_logprobs",
         # vLLM colocate with sleep mode for 24 GB single-GPU memory headroom
         "use_vllm": not disable_vllm,
         "vllm_mode": "colocate",
-        "vllm_enable_sleep_mode": True,
+        "vllm_enable_sleep_mode": vllm_enable_sleep_mode,
         "vllm_gpu_memory_utilization": vllm_gpu_memory_utilization,
         # Checkpointing & reproducibility
         "max_steps": max_steps,
@@ -559,6 +570,23 @@ def build_trl_grpo_kwargs(
         "seed": seed,
         "report_to": "none",
     }
+
+
+def extract_drift_tensors(
+    inputs: dict[str, Any],
+    captured_policy_logps: Any = None,
+) -> tuple[Any, Any, Any]:
+    """Resolve `(train_logps, infer_logps, mask)` across TRL `logps`/`logprobs` key conventions."""
+    infer_lp = inputs.get("sampling_per_token_logps")
+    if infer_lp is None:
+        infer_lp = inputs.get("sampling_per_token_logprobs")
+    train_lp = inputs.get("old_per_token_logps")
+    if train_lp is None:
+        train_lp = inputs.get("old_per_token_logprobs")
+    if train_lp is None:
+        train_lp = captured_policy_logps
+    mask = inputs.get("completion_mask")
+    return train_lp, infer_lp, mask
 
 
 def _completion_to_text(completion: Any) -> str:
@@ -741,6 +769,7 @@ def _evaluate_model_on_heldout(
                 top_p=1.0,
                 top_k=0,
                 repetition_penalty=1.0,
+                use_cache=True,
                 pad_token_id=tokenizer.pad_token_id,
             )
 
@@ -801,6 +830,8 @@ def run_gpu_arm(
     grading_backend: GradingBackend,
     disable_vllm: bool,
     vllm_gpu_memory_utilization: float,
+    vllm_enable_sleep_mode: bool,
+    per_device_train_batch_size: int,
     max_wall_minutes: float,
     resume_from_checkpoint: str | None,
 ) -> dict[str, Any]:
@@ -829,7 +860,7 @@ def run_gpu_arm(
     if arm == "arm0":
         model = AutoModelForCausalLM.from_pretrained(
             cfg.model.base_model,
-            torch_dtype=dtype,
+            dtype=dtype,
             device_map="auto",
         )
         eval_res = _evaluate_model_on_heldout(
@@ -938,6 +969,8 @@ def run_gpu_arm(
         seed=seed,
         disable_vllm=disable_vllm,
         vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
+        vllm_enable_sleep_mode=vllm_enable_sleep_mode,
+        per_device_train_batch_size=per_device_train_batch_size,
     )
     # Filter cleanly against installed TRL GRPOConfig signature while warning on skipped keys
     sig_params = set(inspect.signature(GRPOConfig.__init__).parameters.keys())
@@ -951,9 +984,20 @@ def run_gpu_arm(
     training_args = GRPOConfig(**supported_kwargs)
 
     class DasvDriftGRPOTrainer(GRPOTrainer):  # type: ignore[misc]
-        """GRPOTrainer subclass recording live train-inference logprob drift via dasv."""
+        """GRPOTrainer subclass recording live train-inference logprob drift at 0 extra FLOPs."""
 
         _last_drift_step: int = -1
+        _capture_policy_logps: bool = False
+        _captured_policy_logps: Any = None
+        _warned_missing_drift: bool = False
+
+        def _get_per_token_logps_and_entropies(self, *args: Any, **kwargs: Any) -> Any:
+            res = super()._get_per_token_logps_and_entropies(*args, **kwargs)
+            if self._capture_policy_logps and torch.is_grad_enabled():
+                lp = res[0] if isinstance(res, tuple) else res
+                if hasattr(lp, "detach"):
+                    self._captured_policy_logps = lp.detach()
+            return res
 
         def compute_loss(
             self,
@@ -962,57 +1006,48 @@ def run_gpu_arm(
             return_outputs: bool = False,
             num_items_in_batch: Any = None,
         ) -> Any:
-            loss = super().compute_loss(
-                model,
-                inputs,
-                return_outputs=return_outputs,
-                num_items_in_batch=num_items_in_batch,
-            )
             cur_step = int(getattr(self.state, "global_step", 0))
-            if cur_step != self._last_drift_step:
+            should_capture = cur_step != self._last_drift_step
+            self._captured_policy_logps = None
+            self._capture_policy_logps = should_capture
+            try:
+                loss = super().compute_loss(
+                    model,
+                    inputs,
+                    return_outputs=return_outputs,
+                    num_items_in_batch=num_items_in_batch,
+                )
+            finally:
+                self._capture_policy_logps = False
+
+            if should_capture:
                 try:
-                    infer_lp = inputs.get("sampling_per_token_logprobs")
-                    train_lp = inputs.get("old_per_token_logprobs")
-                    mask = inputs.get("completion_mask")
+                    train_lp, infer_lp, mask = extract_drift_tensors(
+                        inputs,
+                        self._captured_policy_logps,
+                    )
                     if infer_lp is not None and train_lp is not None and mask is not None:
                         d_stats = drift_tracker.record_step(
                             train_lp,
                             infer_lp,
                             mask,
-                            step=cur_step,
+                            step=cur_step + 1,
                         )
                         step_telemetry["last_p95_delta"] = d_stats.p95_abs_delta
                         step_telemetry["last_icepop_frac"] = d_stats.icepop_masked_frac
                         self._last_drift_step = cur_step
-                    elif (
-                        infer_lp is not None
-                        and mask is not None
-                        and hasattr(self, "_get_per_token_logprobs_and_entropies")
-                        and "prompt_ids" in inputs
-                        and "completion_ids" in inputs
-                    ):
-                        with torch.no_grad():
-                            full_ids = torch.cat(
-                                [inputs["prompt_ids"], inputs["completion_ids"]], dim=1
-                            )
-                            full_mask = torch.cat(
-                                [inputs["prompt_mask"], inputs["completion_mask"]], dim=1
-                            )
-                            logits_to_keep = int(inputs["completion_ids"].size(1))
-                            computed_lp, _ = self._get_per_token_logprobs_and_entropies(
-                                model, full_ids, full_mask, logits_to_keep
-                            )
-                        d_stats = drift_tracker.record_step(
-                            computed_lp,
-                            infer_lp,
-                            mask,
-                            step=cur_step,
+                    elif not self._warned_missing_drift:
+                        self._warned_missing_drift = True
+                        print(
+                            "[train_dr_grpo] Drift hook diagnostic (step 1): missing tensor(s) "
+                            f"(train_lp={train_lp is not None}, infer_lp={infer_lp is not None}, "
+                            f"mask={mask is not None}); input keys={sorted(inputs.keys())}",
+                            file=sys.stderr,
                         )
-                        step_telemetry["last_p95_delta"] = d_stats.p95_abs_delta
-                        step_telemetry["last_icepop_frac"] = d_stats.icepop_masked_frac
-                        self._last_drift_step = cur_step
                 except Exception as exc:
                     print(f"[train_dr_grpo] Drift hook warning: {exc}", file=sys.stderr)
+                finally:
+                    self._captured_policy_logps = None
             return loss
 
     class DasvEvalAndGuardCallback(TrainerCallback):  # type: ignore[misc]
@@ -1148,7 +1183,9 @@ def main() -> None:
         default="hardened-subprocess",
     )
     parser.add_argument("--disable-vllm", action="store_true")
-    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.45)
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.35)
+    parser.add_argument("--no-vllm-sleep-mode", action="store_true")
+    parser.add_argument("--per-device-train-batch-size", type=int, default=4)
     parser.add_argument("--max-wall-minutes", type=float, default=180.0)
     parser.add_argument("--resume-from-checkpoint", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -1182,6 +1219,8 @@ def main() -> None:
         grading_backend=cast(GradingBackend, args.grading_backend),
         disable_vllm=args.disable_vllm,
         vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+        vllm_enable_sleep_mode=not args.no_vllm_sleep_mode,
+        per_device_train_batch_size=args.per_device_train_batch_size,
         max_wall_minutes=args.max_wall_minutes,
         resume_from_checkpoint=args.resume_from_checkpoint,
     )
