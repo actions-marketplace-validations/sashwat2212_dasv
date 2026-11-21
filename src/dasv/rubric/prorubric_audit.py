@@ -497,6 +497,36 @@ def inspect_python_rubric_file(
                     )
                 )
 
+        # 4. verifiers.v1 Task subclasses with >= 2 @vf.reward(...) methods (additive weights)
+        elif isinstance(node, ast.ClassDef):
+            reward_names: list[str] = []
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for dec in item.decorator_list:
+                        dec_target = dec.func if isinstance(dec, ast.Call) else dec
+                        if _attr_or_name(dec_target) == "reward":
+                            reward_names.append(item.name)
+                            break
+            if len(reward_names) >= 2:
+                has_gate = _tree_has_conjunctive_guard(node) or file_has_conjunctive
+                targets.append(
+                    RubricInspectionTarget(
+                        file_path=rel_path,
+                        line_number=node.lineno,
+                        kind="python_ast",
+                        rubric_name=node.name,
+                        criterion_count=len(reward_names),
+                        criterion_names=reward_names,
+                        uses_additive_aggregation=not has_gate,
+                        has_conjunctive_gate=has_gate,
+                        evidence=(
+                            f"Task class `{node.name}` at {rel_path}:{node.lineno} defines "
+                            f"{len(reward_names)} @reward methods ({', '.join(reward_names)}) "
+                            f"(conjunctive_gate={has_gate})."
+                        ),
+                    )
+                )
+
     return targets
 
 

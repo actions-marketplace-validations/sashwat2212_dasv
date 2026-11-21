@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Any, cast
@@ -13,6 +14,29 @@ from dasv.adapters.native import NativeDelegateRunner
 from dasv.core.errors import ConfigError, RuntimeSandboxError
 from dasv.core.schemas import AuditFinding, EnvSpec, EnvStandard
 from dasv.verifier.clean_grader import coerce_grading_context, outcome_to_details
+
+_FROM_RE = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)", re.IGNORECASE)
+
+
+def _find_openenv_dockerfile(path: Path) -> Path | None:
+    for candidate in (
+        path / "server" / "Dockerfile",
+        path / "environment" / "Dockerfile",
+        path / "Dockerfile",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _extract_first_from(dockerfile: Path | None) -> str | None:
+    if dockerfile is None or not dockerfile.is_file():
+        return None
+    for line in dockerfile.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = _FROM_RE.match(line)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _find_manifest(path: Path) -> Path | None:
@@ -96,10 +120,17 @@ class OpenEnvAdapter:
         elif (path / "README.md").is_file():
             instruction_text = (path / "README.md").read_text(encoding="utf-8")
 
-        image_ref = str(raw["image"]) if isinstance(raw.get("image"), str) else None
+        dockerfile = _find_openenv_dockerfile(path)
+        explicit_image = (
+            str(raw["image"]).strip()
+            if isinstance(raw.get("image"), str) and raw["image"].strip()
+            else None
+        )
+        image_ref: str | None = explicit_image or _extract_first_from(dockerfile)
         image_digest: str | None = None
         if image_ref and "@sha256:" in image_ref:
             image_digest = "sha256:" + image_ref.split("@sha256:", 1)[1]
+        dockerfile_rel = dockerfile.relative_to(path).as_posix() if dockerfile is not None else None
 
         verifier_paths: list[str] = []
         if (path / "tests").exists():
@@ -132,6 +163,8 @@ class OpenEnvAdapter:
                 "openenv_manifest": raw,
                 "network_mode": network_mode,
                 "supports_interactive_reset": True,
+                "image_explicit": explicit_image is not None,
+                "dockerfile_path": dockerfile_rel,
             },
         )
 

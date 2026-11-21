@@ -274,3 +274,93 @@ async def test_verifiers_v1_and_hud_container_oracle_noop_and_non_container_tier
     n_reward, _ = await hud_adapter.run_noop(hud_spec, gctx)
     assert o_reward == 1.0
     assert n_reward == 0.0
+
+
+def test_real_upstream_verifiers_v1_subscript_and_openenv_server_dockerfile(
+    tmp_path: Path,
+) -> None:
+    """Verify upstream 2026 layouts: vf.Taskset[T, C], @vf.reward, OpenEnv, Harbor v1.1."""
+    from dasv.rubric import audit_rubric_static
+    from dasv.sandbox.probes import run_tier0_static_probes
+
+    # 1. Workspace-local verifiers.v1 package importing `verifiers.v1 as vf` with 2 @vf.reward hooks
+    vf_dir = tmp_path / "gsm8k_upstream"
+    (vf_dir / "gsm8k").mkdir(parents=True)
+    (vf_dir / "pyproject.toml").write_text(
+        '[project]\nname = "gsm8k"\ndependencies = ["datasets"]\n',
+        encoding="utf-8",
+    )
+    (vf_dir / "gsm8k" / "taskset.py").write_text(
+        (
+            "import verifiers.v1 as vf\n"
+            "class MathTask(vf.Task[object]):\n"
+            "    @vf.reward(weight=0.7)\n"
+            "    async def correct(self): return 1.0\n"
+            "    @vf.reward(weight=0.3)\n"
+            "    async def format_ok(self): return 1.0\n"
+            "class MathTaskset(vf.Taskset[MathTask, object]):\n"
+            "    pass\n"
+        ),
+        encoding="utf-8",
+    )
+    reg = AdapterRegistry(load_entry_points=False)
+    vf_adapter = reg.resolve(vf_dir)
+    vf_spec = vf_adapter.load(vf_dir)
+    assert vf_spec.standard == EnvStandard.VERIFIERS_V1
+    _targets, rfindings, _gates = audit_rubric_static(vf_dir, spec=vf_spec)
+    assert any(f.rule_id == "RULE-RUBR-001" for f in rfindings)
+
+    # 2. OpenEnv with Dockerfile inside server/Dockerfile (upstream meta-pytorch/OpenEnv layout)
+    #    plus a server/Dockerfile.backup that must be ignored
+    oe_dir = tmp_path / "coding_env_upstream"
+    (oe_dir / "server").mkdir(parents=True)
+    (oe_dir / "openenv.yaml").write_text("name: coding_env\n", encoding="utf-8")
+    (oe_dir / "server" / "Dockerfile").write_text(
+        "FROM python:3.11-slim\nWORKDIR /app\n",
+        encoding="utf-8",
+    )
+    (oe_dir / "server" / "Dockerfile.backup").write_text(
+        "FROM ubuntu:24.04\n",
+        encoding="utf-8",
+    )
+    oe_adapter = reg.resolve(oe_dir)
+    oe_spec = oe_adapter.load(oe_dir)
+    assert oe_spec.standard == EnvStandard.OPENENV
+    assert oe_spec.image_ref == "python:3.11-slim"
+    oe_probes = run_tier0_static_probes(oe_spec)
+    herm_findings = [f for f in oe_probes if f.rule_id == "RULE-HERM-001"]
+    assert len(herm_findings) == 1
+    assert herm_findings[0].file_path == "server/Dockerfile"
+
+    # 3. Harbor v1.1 allow_internet=false (passes network isolation) & allow_internet=true (fails)
+    h_iso = tmp_path / "harbor_v11_isolated"
+    h_iso.mkdir()
+    (h_iso / "instruction.md").write_text("Solve task.\n", encoding="utf-8")
+    (h_iso / "task.toml").write_text(
+        'schema_version = "1.1"\n'
+        "[environment]\n"
+        'docker_image = "org/task@sha256:' + ("a" * 64) + '"\n'
+        "allow_internet = false\n",
+        encoding="utf-8",
+    )
+    h_adapter = reg.resolve(h_iso)
+    h_iso_spec = h_adapter.load(h_iso)
+    assert h_iso_spec.image_ref == "org/task@sha256:" + ("a" * 64)
+    assert h_iso_spec.metadata["allow_internet"] is False
+    assert h_iso_spec.metadata["network_mode"] == "no-network"
+    assert not any(f.rule_id == "RULE-BNDY-002" for f in run_tier0_static_probes(h_iso_spec))
+
+    h_net = tmp_path / "harbor_v11_internet"
+    h_net.mkdir()
+    (h_net / "instruction.md").write_text("Solve task.\n", encoding="utf-8")
+    (h_net / "task.toml").write_text(
+        'schema_version = "1.1"\n'
+        "[environment]\n"
+        'docker_image = "org/task:latest"\n'
+        "allow_internet = true\n",
+        encoding="utf-8",
+    )
+    h_net_spec = h_adapter.load(h_net)
+    net_findings = [f for f in run_tier0_static_probes(h_net_spec) if f.rule_id == "RULE-BNDY-002"]
+    assert len(net_findings) == 1
+    assert "allow_internet = true" in net_findings[0].evidence

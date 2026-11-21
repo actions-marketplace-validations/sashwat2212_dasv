@@ -62,13 +62,20 @@ _SECRET_CONFIG_FILENAMES = (
 _SENTINEL_PATHS = ("/tmp/.dasv_sentinel", ".dasv_dirty")
 
 
+_DOCKERFILE_BACKUP_SUFFIXES = (".backup", ".bak", ".orig", ".old", "~")
+
+
 def _find_dockerfiles(root: Path) -> list[Path]:
     found: list[Path] = []
-    for candidate_dir in (root, root / "environment"):
+    for candidate_dir in (root, root / "environment", root / "server"):
         if not candidate_dir.is_dir():
             continue
         for p in sorted(candidate_dir.iterdir()):
-            if p.is_file() and p.name.startswith("Dockerfile"):
+            if (
+                p.is_file()
+                and p.name.startswith("Dockerfile")
+                and not p.name.lower().endswith(_DOCKERFILE_BACKUP_SUFFIXES)
+            ):
                 found.append(p)
     return found
 
@@ -224,11 +231,16 @@ def _probe_network_isolation(spec: EnvSpec, dockerfiles: list[Path]) -> list[Aud
             config_file = candidate
             break
 
-    evidence = (
-        "Environment config omits network_mode = 'no-network'/'none'."
-        if not normalized
-        else f"Environment config enables non-hermetic network_mode='{raw_mode}'."
-    )
+    allow_internet = spec.metadata.get("allow_internet")
+    if allow_internet is True:
+        evidence = (
+            "Harbor v1.1 config explicitly sets allow_internet = true "
+            "(outbound network egress enabled)."
+        )
+    elif not normalized:
+        evidence = "Environment config omits network_mode = 'no-network'/'none'."
+    else:
+        evidence = f"Environment config enables non-hermetic network_mode='{raw_mode}'."
     return [
         AuditFinding(
             rule_id="RULE-BNDY-002",
@@ -240,8 +252,9 @@ def _probe_network_isolation(spec: EnvSpec, dockerfiles: list[Path]) -> list[Aud
             line_number=1 if config_file else None,
             evidence=evidence,
             remediation=(
-                "Configure network_mode = 'no-network' (Harbor) or 'none' (--network=none) "
-                "to prevent agents from exfiltrating or fetching solutions online."
+                "Configure allow_internet = false / network_mode = 'no-network' (Harbor) or "
+                "'none' (--network=none) to prevent agents from exfiltrating or fetching "
+                "solutions online."
             ),
         )
     ]

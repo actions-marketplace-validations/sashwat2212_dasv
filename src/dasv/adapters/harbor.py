@@ -95,9 +95,16 @@ class HarborAdapter:
             if isinstance(env_tbl.get("image"), str) and env_tbl["image"].strip()
             else None
         )
+        docker_image = (
+            str(env_tbl["docker_image"]).strip()
+            if isinstance(env_tbl.get("docker_image"), str) and env_tbl["docker_image"].strip()
+            else None
+        )
         image_ref: str | None = explicit_image
         if image_ref is None:
             image_ref = _extract_first_from_image(dockerfile)
+        if image_ref is None:
+            image_ref = docker_image
 
         image_digest: str | None = None
         if image_ref and "@sha256:" in image_ref:
@@ -107,9 +114,21 @@ class HarborAdapter:
         if dockerfile.is_file():
             dockerfile_rel = dockerfile.relative_to(path).as_posix()
 
+        raw_allow_internet = env_tbl.get("allow_internet")
+        allow_internet: bool | None = (
+            raw_allow_internet if isinstance(raw_allow_internet, bool) else None
+        )
+        raw_network_mode = env_tbl.get("network_mode")
+        if raw_network_mode is None and allow_internet is not None:
+            resolved_network_mode: Any = "no-network" if not allow_internet else "allow-internet"
+        else:
+            resolved_network_mode = raw_network_mode
+
         spec_metadata: dict[str, Any] = {
             "harbor_config": raw,
-            "network_mode": env_tbl.get("network_mode"),
+            "network_mode": resolved_network_mode,
+            "allow_internet": allow_internet,
+            "docker_image": docker_image,
             "base_commit": metadata_tbl.get("base_commit") or env_tbl.get("base_commit"),
             "image_explicit": explicit_image is not None,
             "dockerfile_path": dockerfile_rel,

@@ -20,20 +20,29 @@ _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "build", "dist"}
 
 @dataclass
 class _VerifiersAstSummary:
+    imports_verifiers: bool = False
     has_load_environment: bool = False
     has_v1_taskset: bool = False
     has_legacy_v0: bool = False
     legacy_v0_files: list[str] = field(default_factory=list[str])
     rubric_classes: set[str] = field(default_factory=set[str])
+    reward_methods: list[str] = field(default_factory=list[str])
     verifier_files: list[str] = field(default_factory=list[str])
 
 
 def _attr_or_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Subscript):
+        return _attr_or_name(node.value)
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
     return None
+
+
+def _is_reward_decorator(dec: ast.expr) -> bool:
+    target = dec.func if isinstance(dec, ast.Call) else dec
+    return _attr_or_name(target) == "reward"
 
 
 def _introspect_ast(root: Path) -> _VerifiersAstSummary:
@@ -51,16 +60,25 @@ def _introspect_ast(root: Path) -> _VerifiersAstSummary:
         file_has_rubric = False
 
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-                node.name == "load_environment"
-            ):
-                summary.has_load_environment = True
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name == "load_environment":
+                    summary.has_load_environment = True
+                if any(_is_reward_decorator(dec) for dec in node.decorator_list):
+                    summary.reward_methods.append(node.name)
+                    summary.rubric_classes.add("Rubric")
+                    file_has_rubric = True
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "verifiers" or alias.name.startswith("verifiers."):
+                        summary.imports_verifiers = True
             elif isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
+                if mod == "verifiers" or mod.startswith("verifiers."):
+                    summary.imports_verifiers = True
                 if mod.startswith("verifiers.envs"):
                     file_has_legacy = True
                 for alias in node.names:
-                    if alias.name == "Taskset":
+                    if alias.name in {"Taskset", "Task", "TasksetConfig"}:
                         summary.has_v1_taskset = True
                     if alias.name in _LEGACY_V0_SYMBOLS:
                         file_has_legacy = True
@@ -79,6 +97,8 @@ def _introspect_ast(root: Path) -> _VerifiersAstSummary:
             elif isinstance(node, ast.ClassDef):
                 for base in node.bases:
                     base_name = _attr_or_name(base)
+                    if base_name in {"Taskset", "Task", "TasksetConfig"}:
+                        summary.has_v1_taskset = True
                     if base_name in _LEGACY_V0_SYMBOLS:
                         file_has_legacy = True
 
@@ -134,10 +154,12 @@ class VerifiersV1Adapter:
     def detect(self, path: Path) -> bool:
         if not path.is_dir():
             return False
-        has_dep, _ = _pyproject_mentions_verifiers(path)
-        if not has_dep:
+        if not (path / "pyproject.toml").is_file():
             return False
+        has_dep, _ = _pyproject_mentions_verifiers(path)
         summary = _introspect_ast(path)
+        if not (has_dep or summary.imports_verifiers):
+            return False
         return summary.has_load_environment or summary.has_v1_taskset or summary.has_legacy_v0
 
     def load(self, path: Path) -> EnvSpec:
