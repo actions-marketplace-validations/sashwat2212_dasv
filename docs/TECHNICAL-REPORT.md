@@ -199,7 +199,9 @@ To prove that `dasv` pre-training hardening improves downstream RLVR generalizat
 `dasv` ships a zero-config composite GitHub Action ([`action/action.yml`](../action/action.yml)) that installs via `uvx`, executes `dasv audit`, uploads inline **SARIF 2.1.0** annotations to GitHub Code Scanning, publishes a Markdown Step Summary table, attaches the zero-CDN offline HTML Certification Card as a workflow artifact, and gates PR merges on `--fail-on`.
 
 - **Continuous Self-Test**: `.github/workflows/dasv-action-ci.yml` runs on every push and PR against `benchmarks/planted_vulns/hardened/01_hardened_calculator`, asserting `Grade=A` and live SARIF upload.
-- **Live Planted-Leak PR Proof**: *(Recorded during Phase 5D verification on an in-repo branch before `v1.0.0` tag).*
+- **Live Planted-Leak PR Proof (`KPI-SHW-02` Verified)**: On [PR #2](https://github.com/sashwat2212/dasv/pull/2) (closed immediately after verification), deliberately planting `COPY tests/test_outputs.py /app` (`RULE-BNDY-001`) into `benchmarks/planted_vulns/hardened/01_hardened_calculator/environment/Dockerfile` triggered both:
+  1. [`dasv-action Self-Test`](https://github.com/sashwat2212/dasv/actions/runs/45031288242/job/137235241008) → **`FAILURE`** (21s), blocking merge and attaching the `dasv-certification-report` offline HTML + SARIF artifact.
+  2. [GitHub Code Scanning (`dasv`)](https://github.com/sashwat2212/dasv/runs/137235295841) → **`FAILURE`** (`"1 new alert including 1 error"`, `annotations_count: 1`) placing an inline error annotation directly on the offending Dockerfile line via repo-relative SARIF 2.1.0 URIs.
 
 ---
 

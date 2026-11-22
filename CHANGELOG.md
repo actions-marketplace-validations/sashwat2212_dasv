@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Controlled 3-Arm LoRA-Dr.GRPO Seed 42 Ablation Artifacts** (`results/v1_ablation/seed_42/`) proving `dasv` hardening eliminates weak-assertion reward hacking (`0/160` steps) and achieves statistically significant unseen held-out lift (`+5.08 pp` `pass@1`, $p=0.0240$; `+7.77 pp` `pass^4`, $p=0.0202$) on `Qwen/Qwen2.5-Coder-3B-Instruct`.
 - **Production `README.md`** with 60-second `uvx dasv` quickstart, 9-command CLI reference, `dasv-action` workflow snippet, and empirical summary tables.
 
+### Fixed
+- **Repo-relative SARIF 2.1.0 artifact URIs** (`src/dasv/reporting/sarif_writer.py`): Automatically resolves audited subdirectory paths relative to the enclosing `.git` root so GitHub Code Scanning attaches inline PR diff annotations (`annotations_count >= 1`) directly on modified files, and corrected `tool.driver.informationUri`.
+
 ## [0.1.0] - 2026-11-21
 
 ### Added
