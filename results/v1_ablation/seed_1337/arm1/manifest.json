@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "arm": "arm1",
+  "dasv_version": "0.1.0",
+  "timestamp_utc": "2026-11-22T16:26:25.101837+00:00",
+  "base_model": "Qwen/Qwen2.5-Coder-3B-Instruct",
+  "seed": 1337,
+  "max_steps": 160,
+  "grading_backend": "hardened-subprocess",
+  "skipped_trl_kwargs": [],
+  "gpu_name": "NVIDIA L4",
+  "peak_vram_gb": 21.376,
+  "wall_minutes": 167.87,
+  "final_heldout_pass_at_1": 0.40625,
+  "final_heldout_pass_pow_k": 0.308472,
+  "final_p95_abs_delta": 0.041579
+}

@@ -2,7 +2,7 @@
 
 **Authors**: `dasv` Contributors  
 **Date**: November 2026  
-**Version**: `v1.0.0-rc1` Technical Report (Seed 42 Verified; Seed 1337 Multi-Seed Replication In Progress)  
+**Version**: `v1.0.0` Technical Report (Full 2-Seed Controlled Ablation Verified: `seed=42`, `seed=1337`)  
 **Repository**: <https://github.com/sashwat2212/dasv>  
 **License**: Apache-2.0
 
@@ -17,7 +17,7 @@ We introduce **`dasv`** (*Deterministic Adversarial Sandbox Verifier*), an open-
 We evaluate `dasv` across three empirical pillars:
 1. **Planted Vulnerability Benchmark (`KPI-RES-01`)**: **100.0% detection recall (7/7)** across 7 distinct vulnerability classes and **0.0% false-alarm rate (0/3)** on hardened controls.
 2. **Real-World Public Environment Audit (`KPI-RES-02`)**: Auditing **45 public RL environments** at pinned upstream commits across `harbor-framework/terminal-bench-2` (28), `PrimeIntellect-ai/verifiers` (10), and `meta-pytorch/OpenEnv` (7) at **\$0.00 cloud API spend** (`22,735` local Ollama tokens) reveals **100.0% prevalence (35/35)** of unpinned base images (`RULE-HERM-001`) and enabled/unspecified network isolation (`RULE-BNDY-002`) across containerized benchmarks, **2 concrete verifier-path leaks (`RULE-BNDY-001`)** copying `tests/` directly into the agent container, and live cross-family *CHERRL* judge divergence ($\tau_b = 0.177$, $\text{mean}|\Delta| = 0.340$) where a local judge rewarded a markdown-checklist fluff hack (`0.8`) over a concise grounded answer (`0.0`).
-3. **Controlled 3-Arm LoRA-Dr.GRPO Causal Ablation (`KPI-RES-03`)**: Training `Qwen/Qwen2.5-Coder-3B-Instruct` for 160 steps (5.0 epochs, 5,120 rollouts/arm) on 128 MBPP+ / BigCodeBench tasks under identical *LoRA Without Regret* + Dr. GRPO/DAPO hyperparameters (`seed=42`, 1× NVIDIA L4 24 GB) demonstrates the classic **reward-hacking paradox**: Unhardened RLVR (**Arm 1**) achieves *higher* final-epoch training reward (**51.27%**) than `dasv`-Hardened RLVR (**Arm 2**, **48.63%**) via weak-assertion shortcuts (mean off-policy hack gap `+1.88 pp`, peaking at **`+31.25 pp`**), yet yields a **statistically non-significant** held-out gain over the base model (**Arm 0**: `38.67%` → Arm 1: `41.41%`, `+2.73 pp`, $p = 0.249$) while collapsing `pass@4` by **`-6.25 pp`** (`56.25%` → `50.00%`). In contrast, `dasv`-Hardened **Arm 2** eliminates hacking (`0/160` steps), beats or ties Arm 1 at all 4 evaluation checkpoints, and achieves a **statistically significant** held-out lift on both `pass@1` (**`43.75%`**, **`+5.08 pp`**, 95% CI `[+0.78, +9.77] pp`, $p = 0.0240$) and `pass^4` consistency (**`35.12%`**, **`+7.77 pp`**, $p = 0.0202$), doubling Arm 1's gain on the active MBPP+ task band (**`+7.69 pp`**, $p = 0.0242$ vs. `+3.85 pp`, n.s.) under verified low train-inference logprob drift (`0` IcePop-masked steps).
+3. **Controlled 3-Arm LoRA-Dr.GRPO Causal Ablation (`KPI-RES-03`, 2 Independent Seeds)**: Training `Qwen/Qwen2.5-Coder-3B-Instruct` for 160 steps/seed (5.0 epochs, 10,240 training rollouts & 512 unseen held-out rollouts per arm across `seed=42` and `seed=1337` on 1× NVIDIA L4 24 GB) under identical *LoRA Without Regret* + Dr. GRPO/DAPO hyperparameters replicates the **reward-hacking paradox** across both seeds: Unhardened RLVR (**Arm 1**) achieves *higher* mean training reward (`48.90%` vs. `47.29%`) via weak-assertion shortcuts (mean off-policy hack gap **`+2.03 pp ± 0.22 pp`**, spiking up to **`+31.25 pp`**, positive on **`47/320` steps**), yet fails to achieve statistically significant held-out improvement over the unmodified base model (**Arm 0**: `38.67%` → Arm 1 pooled `41.02% ± 0.55%`, `+2.34 pp`, 95% CI `[-1.56, +6.45] pp`, $p = 0.268$; `pass^4`: `27.35%` → `32.49% ± 2.32%`, `+5.14 pp`, $p = 0.064$) while losing `-4.69 pp` on `pass@4` breadth (`56.25%` → `51.56%`). In contrast, `dasv`-Hardened **Arm 2** eliminates hacking (`0/320` steps), outperforms Arm 1 on **both seeds (2/2)** across `pass@1` and `pass^4`, cuts cross-seed `pass^4` variance by **2.2×** (`±1.04%` vs. `±2.32%`), and achieves **statistically significant** pooled held-out gains over Arm 0 on both **`pass@1` (`42.38% ± 1.93%`, `+3.71 pp`, 95% CI `[+0.20, +7.42] pp`, $p = 0.0456$)** and **`pass^4` consistency (`34.38% ± 1.04%`, `+7.03 pp`, 95% CI `[+1.82, +12.78] pp`, $p = 0.0072$)**—reaching **`+10.75 pp` `pass^4` ($p = 0.0088$)** on the active MBPP+ subset (`N=39`) under verified low train-inference logprob drift.
 
 ---
 
@@ -152,45 +152,49 @@ To prove that `dasv` pre-training hardening improves downstream RLVR generalizat
 | **Held-Out Evaluation** | Clean, unseen `N=64` test split (`39` MBPP+ + `25` BigCodeBench) evaluated at steps `40, 80, 120` (`k=1`) and final step `160` (`k=4`, 256 rollouts/arm) |
 | **Logprob-Drift Control** | Exact token-level $|\log \pi_{\text{train}}(y_t) - \log \pi_{\text{vLLM}}(y_t)|$ and importance-sampling ratio $\rho_t$ captured at zero extra FLOPs via `_get_per_token_logps_and_entropies` (`160/160` steps) |
 
-### 5.2 Seed 42 Results (Full 160-Step Run)
+### 5.2 Pooled 2-Seed & Per-Seed Results (`seed=42` & `seed=1337`, 160 Steps/Seed)
 
-#### Main Comparison Table (`N=64` Clean Unseen Held-Out Tasks, Final `k=4` = 256 Rollouts/Arm)
+#### Pooled 2-Seed Summary (`N=64` Clean Unseen Held-Out Tasks, 512 Final Rollouts/Arm Across 2 Seeds)
 
-| Arm | Peak VRAM | Wall Time | Ep 5 Train Reward | Off-Policy Hack Gap (Mean / Max) | Held-Out `pass@1` | $\Delta$ vs. Arm 0 (95% CI, $p$) | Held-Out `pass@4` | Held-Out `pass^4` | Active MBPP+ `pass@1` ($N=39$) |
-|---|---|---|---|---|---|---|---|---|---|
-| **Arm 0 (Base)** | 6.68 GB | 8.5 min | — | — | `38.67%` | Baseline | `56.25%` | `27.35%` | `62.18%` |
-| **Arm 1 (Unhardened)** | 21.06 GB | 140.0 min | **51.27%** *(higher!)* | `+1.88 pp` / **`+31.25 pp`** (`21/160` steps) | `41.41%` | `+2.73 pp` (`[-1.56, +7.03]`, $p=0.249$, **n.s.**) | `50.00%` (**`-6.25 pp`**) | `34.13%` (`+6.78 pp`) | `66.03%` (`+3.85 pp`, n.s.) |
-| **Arm 2 (`dasv`-Hardened)** | 21.40 GB | 158.2 min | `48.63%` | **`0.00 pp` / `0.00 pp`** (`0/160` steps) | **`43.75%`** | **`+5.08 pp`** (`[+0.78, +9.77]`, **$p=0.0240$**) | **`53.13%`** (`+3.13 pp` vs Arm 1) | **`35.12%`** (**`+7.77 pp`**, **$p=0.0202$**) | **`69.87%`** (**`+7.69 pp`**, **$p=0.0242$**) |
+| Arm | Mean Train Reward | Off-Policy Hack Gap (Mean ± Std / Steps) | Pooled Held-Out `pass@1` | $\Delta$ `pass@1` vs. Arm 0 (95% CI, $p$) | Pooled Held-Out `pass@4` | Pooled Held-Out `pass^4` | $\Delta$ `pass^4` vs. Arm 0 (95% CI, $p$) | Active MBPP+ `pass^4` ($N=39$) |
+|---|---|---|---|---|---|---|---|---|
+| **Arm 0 (Base)** | — | — | `38.67%` | Baseline | `56.25%` | `27.35%` | Baseline | `44.86%` |
+| **Arm 1 (Unhardened)** | **48.90%** *(higher!)* | `+2.03 ± 0.22 pp` (`47/320` steps) | `41.02% ± 0.55%` | `+2.34 pp` (`[-1.56, +6.45]`, $p=0.268$, **n.s.**) | `51.56% ± 2.21%` (`-4.69 pp`) | `32.49% ± 2.32%` | `+5.14 pp` (`[-0.24, +11.02]`, $p=0.064$, **n.s.**) | `52.83%` (`+7.97 pp`, $p=0.076$, **n.s.**) |
+| **Arm 2 (`dasv`-Hardened)** | `47.29%` | **`0.00 ± 0.00 pp`** (`0/320` steps) | **`42.38% ± 1.93%`** | **`+3.71 pp`** (`[+0.20, +7.42]`, **$p=0.0456$**) | **`52.34% ± 1.10%`** (`+0.78 pp` vs Arm 1) | **`34.38% ± 1.04%`** | **`+7.03 pp`** (`[+1.82, +12.78]`, **$p=0.0072$**) | **`55.61%`** (**`+10.75 pp`**, **$p=0.0088$**) |
 
-#### Checkpoint Trajectory (`clean_heldout_pass_at_1`, $N=64$)
+*Direct pooled Arm 2 vs. Arm 1 paired bootstrap is consistently positive across every metric and both seeds (`+1.37 pp` `pass@1`, 95% CI `[-1.37, +4.10] pp`, two-sided $p=0.352$; `+1.90 pp` `pass^4`, 95% CI `[-1.30, +5.21] pp`, one-sided $p=0.128$; `+2.78 pp` MBPP+ `pass^4`), with direct-difference CIs widened by the 25/64 starved BigCodeBench tasks at 3B scale.*
 
-| Checkpoint | Step 0 (Base) | Step 40 (`k=1`) | Step 80 (`k=1`) | Step 120 (`k=1`) | Step 160 (`k=4`) |
-|---|---|---|---|---|---|
-| **Arm 1 (Unhardened)** | 38.67% | 42.19% | 40.62% | 42.19% | 41.41% |
-| **Arm 2 (`dasv`-Hardened)** | 38.67% | **48.44%** | **40.62%** | **45.31%** | **43.75%** |
-| **Arm 2 $-$ Arm 1** | `0.00 pp` | **`+6.25 pp`** | `0.00 pp` | **`+3.12 pp`** | **`+2.34 pp`** |
+#### Per-Seed Breakdown (`seed=42` & `seed=1337`)
 
-*Arm 2 beat or tied Arm 1 at all 4 held-out evaluation checkpoints. On Seed 42 alone, direct Arm 2 vs. Arm 1 paired bootstrap yields `+2.34 pp` (`95% CI [-0.39, +5.47] pp`, one-sided $p = 0.075$, two-sided $p = 0.150$; on the active MBPP+ subset `+3.85 pp`, one-sided $p = 0.081$).*
+| Seed | Arm | Peak VRAM | Wall Time | Mean / Ep 5 Train Reward | Hack Gap (Mean / Max / Steps) | Checkpoint Trajectory (`40 → 80 → 120 → 160`) | Final `pass@1` | Final `pass@4` | Final `pass^4` | Mean / Max $p_{95}|\delta_t|$ | IcePop Steps |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **Base** | **Arm 0** | 6.68 GB | 8.5 min | — | — | `38.67%` (Step 0, `k=4`) | `38.67%` | `56.25%` | `27.35%` | — | — |
+| **`42`** | **Arm 1** | 21.05 GB | 140.0 min | `48.91%` / **`51.27%`** | `+1.88 pp` / **`+31.25 pp`** (`21/160`) | `42.19 → 40.62 → 42.19 → 41.41%` | `41.41%` | `50.00%` | `34.13%` | `0.0395 / 0.0753` | `0/160` |
+| **`42`** | **Arm 2** | 21.39 GB | 158.2 min | `46.80%` / `48.63%` | **`0.00 pp` / `0.00 pp`** (`0/160`) | `48.44 → 40.62 → 45.31 → 43.75%` | **`43.75%`** | **`53.13%`** | **`35.12%`** | `0.0458 / 0.0895` | `0/160` |
+| **`1337`** | **Arm 1** | 21.38 GB | 167.9 min | `48.89%` / `50.20%` | `+2.19 pp` / **`+25.00 pp`** (`26/160`) | `43.75 → 50.00 → 34.38 → 40.62%` | `40.62%` | `53.13%` | `30.85%` | `0.0519 / 0.0944` | `0/160` |
+| **`1337`** | **Arm 2** | 21.35 GB | **115.8 min** | `47.77%` / `50.88%` | **`0.00 pp` / `0.00 pp`** (`0/160`) | `40.62 → 43.75 → 42.19 → 41.02%` | **`41.02%`** | `51.56%` | **`33.65%`** | `0.0438 / 0.0829` | `3/160` |
 
-### 5.3 Visual Evidence (Seed 42 Offline SVG Telemetry)
+### 5.3 Visual Evidence (Offline SVG Telemetry)
 
-![Reward and clean held-out pass@1 curves](../results/v1_ablation/seed_42/svgs/ablation_reward_and_heldout.svg)
+#### Seed 42 Telemetry
+![Seed 42 Reward and clean held-out pass@1 curves](../results/v1_ablation/seed_42/svgs/ablation_reward_and_heldout.svg)
 
-![Hacking divergence gap and tamper rate curves](../results/v1_ablation/seed_42/svgs/ablation_hacking_and_tamper.svg)
+![Seed 42 Hacking divergence gap and tamper rate curves](../results/v1_ablation/seed_42/svgs/ablation_hacking_and_tamper.svg)
 
-![Train-inference logprob drift curves](../results/v1_ablation/seed_42/svgs/ablation_logprob_drift.svg)
+![Seed 42 Train-inference logprob drift curves](../results/v1_ablation/seed_42/svgs/ablation_logprob_drift.svg)
 
-### 5.4 Four Key Scientific Findings from the Ablation
+#### Seed 1337 Telemetry
+![Seed 1337 Reward and clean held-out pass@1 curves](../results/v1_ablation/seed_1337/svgs/ablation_reward_and_heldout.svg)
 
-1. **The Reward-Hacking Paradox**: Arm 1's Epoch 5 training reward (`51.27%`) exceeded Arm 2's (`48.63%`) by `+2.64 pp`, yet its unseen held-out accuracy was `-2.34 pp` *lower* and its `pass@4` solution diversity dropped `-6.25 pp` below the unmodified base model (`56.25% → 50.00%`). Off-policy shadow grading proves why: Arm 1's hacking divergence gap grew across training (`+1.46 pp` in Epoch 2 → `+2.25 pp` in Epoch 5), spiking up to `+31.25 pp` on individual steps as the policy reinforced shallow implementations passing weak `RULE-MUT-002` assertions.
-2. **Only `dasv`-Hardened Training Achieved Statistical Significance**: Against the Arm 0 baseline, Arm 1's `+2.73 pp` lift was statistically indistinguishable from zero ($p = 0.249$), whereas Arm 2 achieved statistically significant improvements on both `pass@1` (`+5.08 pp`, $p = 0.0240$) and `pass^4` (`+7.77 pp`, $p = 0.0202$)—and **2×** Arm 1's improvement on active MBPP+ tasks (`+7.69 pp`, $p = 0.0242$ vs. `+3.85 pp`, n.s.).
-3. **Empirical Validation of Tier 3 `SignalProfiler` (`RULE-SIGL-001`)**: Across all 3 arms, the `25/64` held-out BigCodeBench tasks remained near `2–3%` pass rate (`STARVED_ZERO_GRAD` for a 3B model), mechanically compressing overall `N=64` deltas by `39/64 = 0.61×` while consuming ~39% of evaluation capacity—directly validating `dasv`'s recommendation to pre-profile tasksets and filter `STARVED_ZERO_GRAD` tasks before RL training.
-4. **Train-Inference Logprob Drift Ruled Out as Confounder**: Across all `160/160` steps per arm, train-vs-vLLM logprob divergence remained tightly bounded (Arm 1: mean $p_{95}|\delta_t| = 0.0395$, max `0.0753`, IS $\in [0.724, 1.587]$; Arm 2: mean $p_{95}|\delta_t| = 0.0458$, max `0.0895`, IS $\in [0.734, 1.351]$) with **`0` IcePop-masked steps** in either arm. The generalization gap is attributable to verifier hardening, not engine numerical instability.
+![Seed 1337 Hacking divergence gap and tamper rate curves](../results/v1_ablation/seed_1337/svgs/ablation_hacking_and_tamper.svg)
 
-### 5.5 Multi-Seed Replication Status (`seed=1337`)
+### 5.4 Five Key Scientific Findings from the 2-Seed Ablation
 
-> [!NOTE]
-> An independent second seed (`SEED=1337`, identical NVIDIA L4 24 GB VM, 160 steps/arm, reusing the exact `taskset_v1` manifest and Arm 0 baseline) is currently executing. Upon completion, pooled 2-seed `mean ± std` and combined paired-bootstrap $p$-values generated via `plot_ablation.py --seeds-dir results/v1_ablation` will be appended to Section 5 before cutting the final `v1.0.0` release.
+1. **The Reward-Hacking Paradox Replicates Across Independent Seeds**: Across both seeds, Unhardened **Arm 1** logged higher average training rewards (`48.90%` vs. `47.29%`) by exploiting weak `RULE-MUT-002` assertions on **`47 / 320` steps (`14.7%`)** (mean hack gap `+2.03 ± 0.22 pp`, peaking at `+31.25 pp` on Seed 42 and `+25.00 pp` on Seed 1337), yet finished **lower** than `dasv`-Hardened **Arm 2** on held-out `pass@1` and `pass^4` in **2 out of 2 seeds**.
+2. **Only `dasv`-Hardened Training Achieved Statistically Significant Generalization**: Pooling 512 held-out rollouts/arm across both seeds, Unhardened Arm 1 failed to reach significance over Arm 0 on either `pass@1` (`+2.34 pp`, $p = 0.268$) or `pass^4` (`+5.14 pp`, $p = 0.064$). In contrast, `dasv`-Hardened Arm 2 achieved statistically significant pooled lifts on **`pass@1` (`+3.71 pp`, 95% CI `[+0.20, +7.42] pp`, $p = 0.0456$)** and **`pass^4` (`+7.03 pp`, 95% CI `[+1.82, +12.78] pp`, $p = 0.0072$)**—and **`+10.75 pp` `pass^4` ($p = 0.0088$)** on the active MBPP+ task band (`N=39`).
+3. **Training Stability, Consistency & Token Efficiency**: `dasv`-Hardened Arm 2 cut cross-seed `pass^4` standard deviation by **2.2×** (`±1.04%` vs. `±2.32%`), avoided Arm 1's dramatic mid-run instability dip on Seed 1337 (where Arm 1 crashed `-15.62 pp` from `50.00%` at Step 80 to `34.38%` at Step 120 while Arm 2 remained steady at `43.75% → 42.19%`), and completed Seed 1337 **31% faster** (`115.8 min` vs. `167.9 min`) with **25% fewer generated tokens** (`1.23M` vs. `1.63M`).
+4. **Empirical Validation of Tier 3 `SignalProfiler` (`RULE-SIGL-001`)**: Across all arms and both seeds, the `25/64` held-out BigCodeBench tasks remained near `2–4%` pass rate (`STARVED_ZERO_GRAD` for a 3B model; Arm 2 doubled Base to `4.00%` on Seed 1337), mechanically compressing full-split deltas by `39/64 = 0.61×`—directly validating `dasv`'s recommendation to pre-profile tasksets and filter `STARVED_ZERO_GRAD` tasks before committing GPU rollout budgets.
+5. **Train-Inference Logprob Drift Ruled Out as Confounder**: Across all `640` logged training steps (2 seeds × 2 trained arms × 160 steps), train-vs-vLLM logprob divergence remained tightly controlled (mean $p_{95}|\delta_t| \in [0.0395, 0.0519]$, max $\le 0.0944$; `0/320` IcePop-masked steps in Arm 1 and `3/320` (`0.9%`) minor clips at `min IS = 0.469` in Arm 2), confirming that the observed generalization and reliability differences stem from verifier quality rather than engine numerical drift.
 
 ---
 

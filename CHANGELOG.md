@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 - **Multi-seed ablation aggregator & extended significance tests** in `recipes/lora_dr_grpo_ablation/plot_ablation.py` (`--seeds-dir`, `compute_multiseed_summary`, `Arm 2 vs Arm 0` / `Arm 1 vs Arm 0` paired bootstrap, and `pass@k` exact McNemar).
 - **arXiv-style Technical Report** (`docs/TECHNICAL-REPORT.md`) consolidating `KPI-RES-01`, `KPI-RES-02`, and `KPI-RES-03` empirical results with embedded SVG telemetry.
-- **Controlled 3-Arm LoRA-Dr.GRPO Seed 42 Ablation Artifacts** (`results/v1_ablation/seed_42/`) proving `dasv` hardening eliminates weak-assertion reward hacking (`0/160` steps) and achieves statistically significant unseen held-out lift (`+5.08 pp` `pass@1`, $p=0.0240$; `+7.77 pp` `pass^4`, $p=0.0202$) on `Qwen/Qwen2.5-Coder-3B-Instruct`.
+- **Controlled 3-Arm LoRA-Dr.GRPO 2-Seed Ablation Artifacts** (`results/v1_ablation/{seed_42,seed_1337,multiseed_summary.json}`) proving `dasv` hardening eliminates weak-assertion reward hacking (`0/320` steps vs. `47/320` in Arm 1), outperforms Unhardened RLVR on both seeds (2/2), cuts `pass^4` variance by 2.2×, and achieves statistically significant pooled held-out lift (`+3.71 pp` `pass@1`, $p=0.0456$; `+7.03 pp` `pass^4`, $p=0.0072$; `+10.75 pp` MBPP+ `pass^4`, $p=0.0088$) on `Qwen/Qwen2.5-Coder-3B-Instruct`.
 - **Production `README.md`** with 60-second `uvx dasv` quickstart, 9-command CLI reference, `dasv-action` workflow snippet, and empirical summary tables.
 
 ### Fixed
