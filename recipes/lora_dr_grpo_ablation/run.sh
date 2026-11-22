@@ -73,7 +73,9 @@ if [ "${MODE}" = "--smoke" ]; then
 fi
 
 if [ "${MODE}" = "--launch" ]; then
-  echo "[dasv-ablation] Launching Full 3-Arm Controlled Ablation (seed=${SEED}, backend=${GRADING_BACKEND})..."
+  MAX_STEPS="${MAX_STEPS:-160}"
+  EVAL_EVERY="${EVAL_EVERY:-40}"
+  echo "[dasv-ablation] Launching Full 3-Arm Controlled Ablation (seed=${SEED}, steps=${MAX_STEPS}, backend=${GRADING_BACKEND})..."
   if [ "${SKIP_EXISTING}" = "1" ] && [ -f "${OUT_BASE}/arm0/manifest.json" ]; then
     echo "[dasv-ablation] Skipping completed arm0 (${OUT_BASE}/arm0/manifest.json exists)"
   else
@@ -86,16 +88,16 @@ if [ "${MODE}" = "--launch" ]; then
   else
     ${PY_BIN} "${SCRIPT_DIR}/train_dr_grpo.py" \
       --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${OUT_BASE}/arm1" \
-      --arm arm1 --max-steps 200 --eval-every 50 --quick-eval-every 25 --eval-k 4 \
-      --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 180 ${EXTRA_TRAIN_ARGS:-}
+      --arm arm1 --max-steps "${MAX_STEPS}" --eval-every "${EVAL_EVERY}" --quick-eval-every 0 --eval-k 4 \
+      --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 240 ${EXTRA_TRAIN_ARGS:-}
   fi
   if [ "${SKIP_EXISTING}" = "1" ] && [ -f "${OUT_BASE}/arm2/manifest.json" ]; then
     echo "[dasv-ablation] Skipping completed arm2 (${OUT_BASE}/arm2/manifest.json exists)"
   else
     ${PY_BIN} "${SCRIPT_DIR}/train_dr_grpo.py" \
       --config "${CONFIG_PATH}" --taskset-dir "${TASKSET_DIR}" --out-dir "${OUT_BASE}/arm2" \
-      --arm arm2 --max-steps 200 --eval-every 50 --quick-eval-every 25 --eval-k 4 \
-      --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 180 ${EXTRA_TRAIN_ARGS:-}
+      --arm arm2 --max-steps "${MAX_STEPS}" --eval-every "${EVAL_EVERY}" --quick-eval-every 0 --eval-k 4 \
+      --seed "${SEED}" --grading-backend "${GRADING_BACKEND}" --max-wall-minutes 240 ${EXTRA_TRAIN_ARGS:-}
   fi
   ${PY_BIN} "${SCRIPT_DIR}/plot_ablation.py" \
     --arm0 "${OUT_BASE}/arm0/manifest.json" \

@@ -48,7 +48,7 @@ def test_prepare_synthetic_taskset_disjoint_and_audit_contrast(tmp_path: Path) -
     assert manifest["dasv_tier0_audit"]["arm1_tasks_failing_tier0"] == 12
     assert manifest["dasv_tier0_audit"]["arm2_tasks_clean_tier0"] == 12
     assert manifest["arm1_defect_breakdown"]["RULE-BNDY-001"] >= 2
-    assert manifest["arm1_defect_breakdown"]["RULE-MUT-002"] >= 2
+    assert manifest["arm1_defect_breakdown"]["RULE-MUT-002"] >= 5
 
     train_rows = [
         json.loads(line)
@@ -231,16 +231,15 @@ def test_statistical_tests_and_ablation_svg_plotter() -> None:
 
     u_rows = [
         {
-            "step": 0,
+            "step": 1,
             "train_reward": 0.35,
-            "clean_heldout_pass_at_1": 0.35,
             "hack_divergence_gap": 0.0,
             "tamper_rate": 0.0,
             "p95_abs_delta": 0.01,
             "icepop_masked_frac": 0.0,
         },
         {
-            "step": 200,
+            "step": 160,
             "train_reward": 0.82,
             "clean_heldout_pass_at_1": 0.38,
             "hack_divergence_gap": 0.44,
@@ -251,16 +250,15 @@ def test_statistical_tests_and_ablation_svg_plotter() -> None:
     ]
     h_rows = [
         {
-            "step": 0,
+            "step": 1,
             "train_reward": 0.35,
-            "clean_heldout_pass_at_1": 0.35,
             "hack_divergence_gap": 0.0,
             "tamper_rate": 0.0,
             "p95_abs_delta": 0.01,
             "icepop_masked_frac": 0.0,
         },
         {
-            "step": 200,
+            "step": 160,
             "train_reward": 0.64,
             "clean_heldout_pass_at_1": 0.62,
             "hack_divergence_gap": 0.02,

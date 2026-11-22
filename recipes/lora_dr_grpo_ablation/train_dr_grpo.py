@@ -565,7 +565,7 @@ def build_trl_grpo_kwargs(
         "max_steps": max_steps,
         "logging_steps": 1,
         "save_strategy": "steps",
-        "save_steps": 50,
+        "save_steps": min(50, max(10, max_steps // 4)) if max_steps >= 40 else max_steps,
         "save_total_limit": 4,
         "seed": seed,
         "report_to": "none",
@@ -718,7 +718,7 @@ def _evaluate_model_on_heldout(
     eval_jsonl_path: Path,
     temperature: float = 0.8,
     max_new_tokens: int = 1024,
-    batch_size: int = 8,
+    batch_size: int = 16,
     seed: int = 42,
 ) -> dict[str, Any]:
     """Run k generations per clean held-out task and compute pass@1, pass@k, pass^k & Wilson CI."""
@@ -730,8 +730,8 @@ def _evaluate_model_on_heldout(
     model.eval()
     device = next(model.parameters()).device
 
-    # Cap concurrent sequences <= 8 to avoid 24 GB VRAM KV-cache spikes when k=4
-    eff_prompt_batch = max(1, min(batch_size, 8 // max(1, k)))
+    # Cap concurrent sequences <= 16 (< 10 GB VRAM while vLLM is asleep) for 2x faster evals
+    eff_prompt_batch = max(1, min(batch_size, 16 // max(1, k)))
 
     task_pass_counts: dict[str, int] = {}
     task_pass1: list[float] = []
@@ -911,8 +911,8 @@ def run_gpu_arm(
         "tamper_rate": 0.0,
         "last_p95_delta": 0.0,
         "last_icepop_frac": 0.0,
-        "last_heldout_p1": 0.0,
-        "last_heldout_powk": 0.0,
+        "last_heldout_p1": None,
+        "last_heldout_powk": None,
     }
 
     grade_mode: Literal["hardened", "naive"] = "naive" if arm == "arm1" else "hardened"
@@ -1058,8 +1058,9 @@ def run_gpu_arm(
             step = int(state.global_step)
             model_ref = kwargs.get("model")
 
+            eval_ran = False
             if model_ref is not None and step > 0:
-                if eval_every > 0 and (step % eval_every == 0 or step == max_steps):
+                if step == max_steps:
                     ev = _evaluate_model_on_heldout(
                         model_ref,
                         tokenizer,
@@ -1072,7 +1073,10 @@ def run_gpu_arm(
                     )
                     step_telemetry["last_heldout_p1"] = ev["clean_heldout_pass_at_1"]
                     step_telemetry["last_heldout_powk"] = ev["clean_heldout_pass_pow_k"]
-                elif quick_eval_every > 0 and step % quick_eval_every == 0:
+                    eval_ran = True
+                elif (eval_every > 0 and step % eval_every == 0) or (
+                    quick_eval_every > 0 and step % quick_eval_every == 0
+                ):
                     ev = _evaluate_model_on_heldout(
                         model_ref,
                         tokenizer,
@@ -1084,33 +1088,35 @@ def run_gpu_arm(
                         seed=seed,
                     )
                     step_telemetry["last_heldout_p1"] = ev["clean_heldout_pass_at_1"]
+                    step_telemetry["last_heldout_powk"] = ev["clean_heldout_pass_pow_k"]
+                    eval_ran = True
 
             tr_r = float(step_telemetry["train_reward"])
             sh_r = float(step_telemetry["clean_shadow_reward"])
-            _append_jsonl(
-                metrics_jsonl,
-                {
-                    "step": step,
-                    "arm": arm,
-                    "train_reward": round(tr_r, 6),
-                    "clean_shadow_reward": round(sh_r, 6),
-                    "hack_divergence_gap": round(tr_r - sh_r, 6),
-                    "tamper_rate": round(float(step_telemetry["tamper_rate"]), 6),
-                    "clean_heldout_pass_at_1": round(float(step_telemetry["last_heldout_p1"]), 6),
-                    "clean_heldout_pass_pow_k": round(
-                        float(step_telemetry["last_heldout_powk"]), 6
-                    ),
-                    "p95_abs_delta": round(float(step_telemetry["last_p95_delta"]), 6),
-                    "icepop_masked_frac": round(float(step_telemetry["last_icepop_frac"]), 6),
-                    "peak_vram_gb": round(
-                        (torch.cuda.max_memory_allocated() / (1024**3))
-                        if torch.cuda.is_available()
-                        else 0.0,
-                        3,
-                    ),
-                    "elapsed_sec": round(time.monotonic() - t_start, 2),
-                },
-            )
+            row: dict[str, Any] = {
+                "step": step,
+                "arm": arm,
+                "train_reward": round(tr_r, 6),
+                "clean_shadow_reward": round(sh_r, 6),
+                "hack_divergence_gap": round(tr_r - sh_r, 6),
+                "tamper_rate": round(float(step_telemetry["tamper_rate"]), 6),
+                "p95_abs_delta": round(float(step_telemetry["last_p95_delta"]), 6),
+                "icepop_masked_frac": round(float(step_telemetry["last_icepop_frac"]), 6),
+                "peak_vram_gb": round(
+                    (torch.cuda.max_memory_allocated() / (1024**3))
+                    if torch.cuda.is_available()
+                    else 0.0,
+                    3,
+                ),
+                "elapsed_sec": round(time.monotonic() - t_start, 2),
+            }
+            if eval_ran and step_telemetry["last_heldout_p1"] is not None:
+                row["clean_heldout_pass_at_1"] = round(float(step_telemetry["last_heldout_p1"]), 6)
+            if eval_ran and step_telemetry["last_heldout_powk"] is not None:
+                row["clean_heldout_pass_pow_k"] = round(
+                    float(step_telemetry["last_heldout_powk"]), 6
+                )
+            _append_jsonl(metrics_jsonl, row)
 
             if (time.monotonic() - t_start) >= wall_limit_sec:
                 print(

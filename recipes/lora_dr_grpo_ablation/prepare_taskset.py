@@ -1158,7 +1158,7 @@ def prepare_ablation_taskset(
     n_heldout: int = 64,
     seed: int = 42,
     bndy_frac: float = 0.20,
-    weak_test_frac: float = 0.20,
+    weak_test_frac: float = 0.45,
 ) -> dict[str, Any]:
     """Generate paired Arm 1 (unhardened), Arm 2 (hardened), and shared clean held-out splits."""
     if source == "synthetic":
@@ -1270,6 +1270,8 @@ def main() -> None:
     parser.add_argument("--n-train", type=int, default=128)
     parser.add_argument("--n-heldout", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--bndy-frac", type=float, default=0.20)
+    parser.add_argument("--weak-test-frac", type=float, default=0.45)
     args = parser.parse_args()
 
     manifest = prepare_ablation_taskset(
@@ -1278,6 +1280,8 @@ def main() -> None:
         n_train=args.n_train,
         n_heldout=args.n_heldout,
         seed=args.seed,
+        bndy_frac=args.bndy_frac,
+        weak_test_frac=args.weak_test_frac,
     )
     print(
         f"[prepare_taskset] Ready ({manifest['source']}): "

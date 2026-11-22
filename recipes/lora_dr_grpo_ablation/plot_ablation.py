@@ -64,10 +64,17 @@ def build_ablation_svgs(
     all_steps = [int(r.get("step", 0)) for r in (*unhardened_rows, *hardened_rows)]
     max_step = max(all_steps, default=1)
 
+    def _with_step0(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if arm0_pass_at_1 is None:
+            return rows
+        if any(int(r.get("step", -1)) == 0 and "clean_heldout_pass_at_1" in r for r in rows):
+            return rows
+        return [{"step": 0, "clean_heldout_pass_at_1": arm0_pass_at_1}, *rows]
+
     u_train = _polyline(unhardened_rows, "train_reward", max_step, 1.0)
-    u_held = _polyline(unhardened_rows, "clean_heldout_pass_at_1", max_step, 1.0)
+    u_held = _polyline(_with_step0(unhardened_rows), "clean_heldout_pass_at_1", max_step, 1.0)
     h_train = _polyline(hardened_rows, "train_reward", max_step, 1.0)
-    h_held = _polyline(hardened_rows, "clean_heldout_pass_at_1", max_step, 1.0)
+    h_held = _polyline(_with_step0(hardened_rows), "clean_heldout_pass_at_1", max_step, 1.0)
 
     arm0_line = ""
     if arm0_pass_at_1 is not None:
@@ -219,7 +226,10 @@ def render_ablation_comparison_html(
     )
 
     def _final(rows: list[dict[str, Any]], key: str) -> float:
-        return float(rows[-1].get(key, 0.0)) if rows else 0.0
+        for row in reversed(rows):
+            if key in row and row[key] is not None:
+                return float(row[key])
+        return 0.0
 
     u_tr_final = _final(unhardened_rows, "train_reward")
     u_he_final = _final(unhardened_rows, "clean_heldout_pass_at_1")
