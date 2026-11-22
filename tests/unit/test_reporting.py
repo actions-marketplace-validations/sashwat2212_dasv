@@ -138,3 +138,57 @@ def test_sarif_preserves_dotfiles_and_normalizes_prefixes(hardened_harbor_env: P
         for r in sarif["runs"][0]["results"]
     ]
     assert actual_uris == [expected for _raw, expected in cases]
+
+
+def test_sarif_emits_repo_relative_uris_inside_git_checkout(tmp_path: Path) -> None:
+    """When auditing a subdirectory inside a git repo, SARIF URIs must be repo-relative."""
+    (tmp_path / ".git").mkdir()
+    env_dir = tmp_path / "envs" / "my_task"
+    (env_dir / "environment").mkdir(parents=True)
+    (env_dir / "environment" / "Dockerfile").write_text("FROM python:3.12\n", encoding="utf-8")
+
+    manifest = build_run_manifest(env_dir)
+    spec = EnvSpec(
+        task_id="my-task",
+        standard=EnvStandard.HARBOR,
+        root_path=env_dir,
+        instruction_text="Solve it.",
+    )
+    report = AuditReport(
+        manifest=manifest,
+        env_spec=spec,
+        grade="F",
+        hackability_score=20.0,
+        findings=[
+            AuditFinding(
+                rule_id="RULE-BNDY-001",
+                title="Tests copied into agent image",
+                severity=Severity.CRITICAL,
+                tier=0,
+                source="dasv",
+                file_path="environment/Dockerfile",
+                line_number=4,
+                evidence="COPY tests/test_outputs.py /app",
+                remediation="Mount tests read-only.",
+            ),
+            AuditFinding(
+                rule_id="RULE-BNDY-002",
+                title="Network not disabled",
+                severity=Severity.HIGH,
+                tier=0,
+                source="dasv",
+                file_path=None,
+                line_number=None,
+                evidence="allow_internet = true",
+                remediation="Set allow_internet = false.",
+            ),
+        ],
+    )
+    sarif = build_sarif_dict(report)
+    driver = sarif["runs"][0]["tool"]["driver"]
+    assert driver["informationUri"] == "https://github.com/sashwat2212/dasv"
+    uris = [
+        r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+        for r in sarif["runs"][0]["results"]
+    ]
+    assert uris == ["envs/my_task/environment/Dockerfile", "envs/my_task"]

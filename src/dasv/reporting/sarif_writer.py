@@ -20,21 +20,47 @@ _SEVERITY_TO_SARIF_LEVEL: dict[Severity, str] = {
 }
 
 
-def _normalize_sarif_uri(file_path: str | None) -> str:
-    """Normalize finding file paths to SARIF artifact URIs without stripping dotfiles."""
+def _resolve_repo_relative_prefix(env_root: Path) -> str:
+    """Return POSIX path of `env_root` relative to its enclosing git repo root, if any."""
+    try:
+        resolved = env_root.resolve()
+    except OSError:
+        return ""
+    search_dir = resolved if resolved.is_dir() else resolved.parent
+    for candidate in (search_dir, *search_dir.parents):
+        if (candidate / ".git").exists():
+            try:
+                rel = resolved.relative_to(candidate).as_posix()
+            except ValueError:
+                return ""
+            return "" if rel in {"", "."} else rel
+    return ""
+
+
+def _normalize_sarif_uri(file_path: str | None, *, repo_prefix: str = "") -> str:
+    """Normalize finding file paths to repo-relative SARIF artifact URIs preserving dotfiles."""
     if not file_path:
-        return "."
-    normalized = file_path.replace("\\", "/")
+        return repo_prefix or "."
+    raw_posix = file_path.replace("\\", "/")
+    is_abs = raw_posix.startswith("/")
+    normalized = raw_posix
     while normalized.startswith("./"):
         normalized = normalized[2:]
     normalized = normalized.lstrip("/")
-    return normalized or "."
+    if not normalized or normalized == ".":
+        return repo_prefix or "."
+    if is_abs or not repo_prefix:
+        return normalized
+    if normalized == repo_prefix or normalized.startswith(f"{repo_prefix}/"):
+        return normalized
+    return f"{repo_prefix}/{normalized}"
 
 
 def build_sarif_dict(report: AuditReport) -> dict[str, Any]:
     """Convert an AuditReport into a SARIF 2.1.0-compliant dictionary."""
     rules_by_id: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
+    repo_prefix = _resolve_repo_relative_prefix(report.env_spec.root_path)
 
     for finding in report.findings:
         level = _SEVERITY_TO_SARIF_LEVEL[finding.severity]
@@ -56,7 +82,7 @@ def build_sarif_dict(report: AuditReport) -> dict[str, Any]:
                 },
             }
 
-        uri = _normalize_sarif_uri(finding.file_path)
+        uri = _normalize_sarif_uri(finding.file_path, repo_prefix=repo_prefix)
         physical_location: dict[str, Any] = {
             "artifactLocation": {"uri": uri},
         }
@@ -87,7 +113,7 @@ def build_sarif_dict(report: AuditReport) -> dict[str, Any]:
                     "driver": {
                         "name": "dasv",
                         "semanticVersion": __version__,
-                        "informationUri": "https://github.com/sashwatsinha/dasv",
+                        "informationUri": "https://github.com/sashwat2212/dasv",
                         "rules": list(rules_by_id.values()),
                     }
                 },
