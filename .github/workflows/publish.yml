@@ -65,7 +65,7 @@ jobs:
           python-version: "3.12"
 
       - name: Publish to TestPyPI via Trusted Publishing
-        run: uv publish --index testpypi dist/*
+        run: uv publish --publish-url https://test.pypi.org/legacy/ --trusted-publishing always dist/*
 
   publish-pypi:
     name: Publish to PyPI (OIDC)
@@ -90,4 +90,4 @@ jobs:
           python-version: "3.12"
 
       - name: Publish to PyPI via Trusted Publishing
-        run: uv publish dist/*
+        run: uv publish --trusted-publishing always dist/*
