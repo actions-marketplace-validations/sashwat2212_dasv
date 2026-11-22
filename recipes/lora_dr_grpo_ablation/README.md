@@ -3,7 +3,7 @@
 This recipe runs the 3-arm controlled RLVR ablation proving the causal impact of `dasv` pre-training environment hardening while holding base model (`Qwen/Qwen2.5-Coder-3B-Instruct`), *LoRA Without Regret* hyperparameters (`all-linear`, `r=16`, `lr=5e-5`, `prompts_per_step=4 < 32`), Dr. GRPO / DAPO Clip-Higher (`0.20 / 0.28`), seed, and compute strictly identical:
 
 - **Arm 0**: Unmodified Base Model (`Qwen/Qwen2.5-Coder-3B-Instruct`) on the 64 clean unseen held-out tasks.
-- **Arm 1 (Unhardened)**: Trained on 128 Harbor tasks containing realistic `RULE-BNDY-001` (20% exposed mutable workspace tests) and `RULE-MUT-002` (20% under-specified tests) flaws, with off-policy clean shadow grading logging true per-step `hack_divergence_gap` and `tamper_rate`.
+- **Arm 1 (Unhardened)**: Trained on 128 Harbor tasks containing realistic `RULE-BNDY-001` (20% exposed mutable workspace tests), `RULE-MUT-002` (45% under-specified tests), and hermeticity/network defects (35%), with off-policy clean shadow grading logging true per-step `hack_divergence_gap` and `tamper_rate`.
 - **Arm 2 (`dasv`-Hardened)**: Trained on the exact same 128 specs hardened by `dasv` (pinned base image, `allow_internet = false`, full hidden test suites, two-phase tamper-proof Verification Plane).
 
 ## 1. CPU Dry-Run Verification (₹0 / \$0)

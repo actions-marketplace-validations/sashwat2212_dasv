@@ -23,6 +23,8 @@ dasv.toml
 report.html
 report.json
 manifest.json
+!results/v1_ablation/**/manifest.json
+!results/v1_ablation/**/report.json
 
 # OS / IDE
 .DS_Store

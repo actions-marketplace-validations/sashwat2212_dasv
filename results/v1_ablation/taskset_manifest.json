@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "source": "hf",
+  "seed": 42,
+  "pinned_image": "python:3.12-slim@sha256:9e01a05c7718569f21f99a3a8301c2d0795857e9522e655f6b9772947f5d2a3d",
+  "n_train": 128,
+  "n_heldout": 64,
+  "arm1_defect_breakdown": {
+    "RULE-BNDY-001": 26,
+    "RULE-MUT-002": 58,
+    "hermetic_only": 44
+  },
+  "dasv_tier0_audit": {
+    "arm1_tasks_failing_tier0": 128,
+    "arm2_tasks_clean_tier0": 128
+  },
+  "train_ids_sha256": "54022b704aa3ae62e729bc5cef2d38760af0451460eb01b8bf08256886553a2f",
+  "heldout_ids_sha256": "e1e7fd3d9da5044bb732c7fb07484debaf88ffa164a1d5f5c50349108bc9270d"
+}

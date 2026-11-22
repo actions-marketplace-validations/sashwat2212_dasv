@@ -1,71 +1,181 @@
 # `dasv` — Deterministic Adversarial Sandbox Verifier
 
-Pre-flight adversarial security, construct-validity, and RLVR policy-gradient signal auditor for RL post-training environments.
+[![CI](https://github.com/sashwat2212/dasv/actions/workflows/ci.yml/badge.svg)](https://github.com/sashwat2212/dasv/actions/workflows/ci.yml)
+[![dasv-action](https://github.com/sashwat2212/dasv/actions/workflows/dasv-action-ci.yml/badge.svg)](https://github.com/sashwat2212/dasv/actions/workflows/dasv-action-ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/dasv.svg)](https://pypi.org/project/dasv/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](./LICENSE)
 
-`dasv` sits *above* native schema linters (`harbor check`, `openenv validate`, `vf-validate`) to catch verifier loopholes, `.git`/secret boundary leaks, flakiness, rubric compensation hacks, and zero-gradient GRPO/DAPO compute waste **before** burning GPU budgets.
+**Pre-flight adversarial security, construct-validity, and RLVR policy-gradient signal auditor for RL post-training environments.**
 
----
+`dasv` sits *above* native schema linters (`harbor check`, `openenv validate`, `vf-validate`) across **Harbor**, **OpenEnv**, **Prime Intellect `verifiers` v1**, and **HUD**. It catches verifier boundary leaks, floating base images, shallow tests, rubric compensation hacks, cross-family judge divergence, and zero-gradient GRPO/DAPO compute waste **before** you burn GPU budgets.
 
-## Current Status: Stage 5 Walking Skeleton (`v0.1.0-alpha`)
-
-This repository contains the complete locked SDLC Stages 0–4 design corpus (`docs/`) and the verified Stage 5 Python foundation:
-
-- **Core Schemas & Config**: Frozen Pydantic v2 models (`EnvSpec`, `AuditFinding`, `AuditReport`, `RunManifest`, `DeterminismMetrics`, `ExploitTrace`, `SignalProfile`), strict `dasv.toml` loader (`extra="forbid"`), and deterministic exit codes `0–5`.
-- **Atomic `BudgetGuard`**: `asyncio.Lock`-protected pre-flight reservation & reconciliation circuit breaker with `$0` local-model support and unknown-cloud-model safety.
-- **Cross-Standard Interop Adapters**: Auto-detection & canonical `EnvSpec` parsing for **Harbor**, **OpenEnv**, **Prime Intellect `verifiers` v1** (with static AST introspection & legacy v0 `RULE-ADPT-001` deprecation detection), and **HUD** via `dasv.adapters` entry points, plus `NativeDelegateRunner`.
-- **Tier 0 Static Boundary & Hermeticity Probes (`$0`)**: `RULE-BNDY-001..004` and `RULE-HERM-001..002`.
-- **RLVR Statistical Estimators & Grading**: Unbiased `pass@k`, `pass^k`, binary reward variance, GRPO/DAPO zero-gradient probability $p^G + (1-p)^G$, `CurriculumBucket`, `HackabilityScore (0–100)`, and deterministic Grade `A–F`.
-- **Reporting & CLI**: `report.json`, `manifest.json`, **SARIF 2.1.0**, and working `dasv doctor`, `dasv inspect`, `dasv audit --tiers 0`, and `dasv report` commands.
-
-Tier 1–3 container execution, anti-patch/*ImpossibleBench* mutators, Hacker-Fixer loop, *ProRubric*/*CHERRL* stress tests, offline HTML reports, and the controlled *LoRA Without Regret* Dr. GRPO/DAPO ablation arrive in **Stage 6 (M1–M4)**.
+> **Read the full empirical findings in [`docs/TECHNICAL-REPORT.md`](./docs/TECHNICAL-REPORT.md)** and the 45-environment public audit in [`results/public_audit/AUDIT_REPORT.md`](./results/public_audit/AUDIT_REPORT.md).
 
 ---
 
-## Quickstart
+## Why `dasv`? Headline Empirical Results
+
+| Empirical Study | Scope | Key Verified Outcome |
+|---|---|---|
+| **Planted Vulnerability Corpus** (`KPI-RES-01`) | 7 planted vulnerability classes + 3 hardened controls | **100.0% recall (7/7)**, **0.0% false-alarm rate (0/3)** |
+| **Real Public RL Env Audit** (`KPI-RES-02`) | **45 public tasks** across `terminal-bench-2` (28), `verifiers` (10), `OpenEnv` (7) at **\$0.00 API spend** | **100%** of containerized tasks (35/35) unpinned (`RULE-HERM-001`) & internet-enabled (`RULE-BNDY-002`); **2 concrete `COPY tests/` leaks** (`RULE-BNDY-001`); live *CHERRL* fluff-hack judge divergence on `color-codeword` ($\tau_b = 0.177$) |
+| **Causal LoRA-Dr.GRPO Ablation** (`KPI-RES-03`) | `Qwen2.5-Coder-3B-Instruct`, 160 steps (5.0 epochs, 1× NVIDIA L4, `seed=42`, `N=64` unseen held-out tasks, `k=4`) | Unhardened **Arm 1** had *higher* Ep 5 train reward (`51.27%` vs `48.63%`, hack gap up to `+31.25 pp`) yet **non-significant** held-out gain (`+2.73 pp`, $p=0.249$) & **`-6.25 pp` `pass@4` collapse**. `dasv`-Hardened **Arm 2** achieved **`0/160` hack steps** and **statistically significant** held-out lift: **`+5.08 pp` `pass@1`** ($p=0.0240$), **`+7.77 pp` `pass^4`** ($p=0.0202$), and **2×** Arm 1's gain on active MBPP+ (**`+7.69 pp`**, $p=0.0242$) |
+
+![dasv Controlled RLVR Ablation: Reward and Clean Held-Out pass@1](./results/v1_ablation/seed_42/svgs/ablation_reward_and_heldout.svg)
+
+![dasv Controlled RLVR Ablation: Hacking Divergence Gap and Tamper Rate](./results/v1_ablation/seed_42/svgs/ablation_hacking_and_tamper.svg)
+
+---
+
+## 60-Second Quickstart
+
+Run directly with [`uvx`](https://docs.astral.sh/uv/) (zero setup) or install via `pip`:
 
 ```bash
-# Install dependencies (Python >= 3.11 managed automatically by uv)
-uv sync
+# Run without installing (recommended)
+uvx dasv doctor
 
-# 1. Check local runtime, host/Docker arch parity, and optional native CLIs
-uv run dasv doctor
+# Or install globally / into a project
+pip install dasv
+# Optional: install GPU ablation recipe extras
+pip install "dasv[recipes]"
+```
 
-# 2. Auto-detect and inspect a Harbor, OpenEnv, verifiers v1, or HUD environment
-uv run dasv inspect ./path/to/env
+Audit any Harbor, OpenEnv, `verifiers` v1, or HUD environment in seconds:
 
-# 3. Run $0 Tier 0 static boundary & hermeticity audit with JSON + SARIF 2.1.0 output
-uv run dasv audit ./path/to/env \
+```bash
+# 1. Verify Python, Docker/OCI arch parity, and optional native validators
+dasv doctor
+
+# 2. Auto-detect environment standard and print canonical EnvSpec
+dasv inspect ./benchmarks/planted_vulns/hardened/01_hardened_calculator
+
+# 3. Run $0 Tier 0 static boundary & hermeticity audit with JSON + SARIF + Offline HTML
+dasv audit ./benchmarks/planted_vulns/vulnerable/01_test_tampering_copy \
   --tiers 0 \
   --out-dir ./artifacts/run-01 \
   --sarif ./artifacts/run-01/report.sarif \
+  --html ./artifacts/run-01/report.html \
   --fail-on high
-```
 
-### Development Checks
+# 4. Run $0 Tier 1 clean-image Oracle/No-op determinism + anti-patch mutations
+dasv audit ./path/to/env --tiers 0,1 --replays 10 --with-mutations
 
-```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run pyright
-uv run pytest
+# 5. Run budget-capped Tier 2 adversarial Hacker-Fixer red-team (local Ollama = $0)
+dasv redteam ./path/to/env --model qwen2.5-coder:7b --propose-fix --max-cost-usd 2.00
+
+# 6. Stress-test LLM rubrics (ProRubric conjunctive gating + CHERRL cross-family divergence)
+dasv rubric ./path/to/rubric_env --judges qwen2.5-coder:7b,gemma3:4b
+
+# 7. Profile GRPO/DAPO zero-gradient waste & export certified GOLDILOCKS curriculum
+dasv profile ./path/to/taskset --rollouts 8 --export-curriculum ./curriculum.jsonl
+dasv export --format trl --curriculum ./curriculum.jsonl --out ./trl_dataset.jsonl
 ```
 
 ---
 
-## Documentation Index (SDLC Stages 0–4)
+## Drop-In GitHub Action (`dasv-action`)
 
-| Stage | Document | Description |
-|---|---|---|
-| Research | [docs/RESEARCH-DOSSIER.md](./docs/RESEARCH-DOSSIER.md) | 2025–2026 RL post-training, rubric RL & reward-hacking dossier |
-| Stage 0 | [docs/00-CHARTER.md](./docs/00-CHARTER.md) | Project Charter, scope guardrails & `$0–$50` budget envelope |
-| Stage 1 | [docs/01-BRD.md](./docs/01-BRD.md) | Business Requirements (`BRD-REQ-01`–`BRD-REQ-18`) & KPIs |
-| Stage 2 | [docs/02-PRD-FEATURES.md](./docs/02-PRD-FEATURES.md) | PRD, `FEAT-01`–`FEAT-22`, frozen CLI & Pydantic v2 SDK contract |
-| Stage 3 | [docs/03-ARCHITECTURE.md](./docs/03-ARCHITECTURE.md) | 4-Plane Architecture (`ARCH-COMP-01`–`10`) & `ADR-001`–`007` |
-| Stage 4 | [docs/04-DESIGN-SANDBOX-RUNTIME.md](./docs/04-DESIGN-SANDBOX-RUNTIME.md) | `SDD-01`: Orchestrator, `BudgetGuard`, Sandbox Runtime & Probes |
-| Stage 4 | [docs/04-DESIGN-VERIFIER-ENGINE.md](./docs/04-DESIGN-VERIFIER-ENGINE.md) | `SDD-02`: Clean-Image Grader, Mutators, Hacker-Fixer & Rubric Engine |
-| Stage 4 | [docs/04-DESIGN-INTEROP-ADAPTERS.md](./docs/04-DESIGN-INTEROP-ADAPTERS.md) | `SDD-03`: Interop Adapters & `NativeDelegateRunner` |
-| Stage 4 | [docs/04-DESIGN-TELEMETRY-EVAL.md](./docs/04-DESIGN-TELEMETRY-EVAL.md) | `SDD-04`: `pass@k`/`pass^k`, `HackabilityScore`, Grade `A–F` & SARIF/HTML |
-| Stage 4 | [docs/04-DESIGN-RL-INTEGRATION.md](./docs/04-DESIGN-RL-INTEGRATION.md) | `SDD-05`: RL Exporters, LoRA-Dr.GRPO Ablation & Logprob-Drift Hook |
+Gate every RL environment PR with inline **SARIF 2.1.0 Code Scanning** annotations and an offline **HTML Certification Card** artifact:
+
+```yaml
+name: dasv RL Verifier Gate
+on: [pull_request]
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write  # required for inline SARIF Code Scanning alerts
+
+jobs:
+  dasv-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sashwat2212/dasv/action@v1.0.0
+        with:
+          path: ./envs/my_task
+          tiers: "0,1"
+          with-mutations: "true"
+          fail-on: high
+```
+
+Outputs exposed to downstream workflow steps: `grade` (`A–F`), `hackability-score` (`0–100`), `sarif-file`, `html-file`, `report-json`, and `exit-code`.
+
+---
+
+## Architecture: 4 Planes & 4 Cost-Aware Tiers
+
+`dasv` enforces strict isolation between the **Untrusted Execution Plane** (`--network=none`, `--cap-drop=ALL`, `--pids-limit`, zero host secrets) and the **Trusted Verification Plane** (**Clean-Image Out-of-Container Grading** against a pristine OCI digest):
+
+1. **Tier 0 (\$0 Static)**: Native CLI delegation (`harbor`, `openenv`, `vf-validate`, `hud`) + `RULE-BNDY-001..004` (writable tests, network egress, secrets, `.git` history leaks) + `RULE-HERM-001..002` (unpinned tags, boot-time installs) + static `ProRubric` AST scan.
+2. **Tier 1 (\$0 Local Docker)**: Clean-image $N$-trial Oracle & $M$-trial No-op determinism (`pass^k`, replay variance, p50/p95 latency) + deterministic Anti-Patch & *ImpossibleBench* spec-contradiction mutations (`RULE-MUT-001..002`).
+3. **Tier 2 (Capped \$ / Local LLM)**: Atomic `BudgetGuard`-protected ReAct **Hacker-Fixer** loop across 6 hack classes + 3-invariant **Gold-Sanity Gate** + *ProRubric* verbosity perturbation & *CHERRL* cross-family judge divergence (`RULE-RUBR-001..003`).
+4. **Tier 3 (Capped \$ / Offline Traces)**: Base-policy `pass@1`/`pass@k`/`pass^k` & GRPO zero-gradient probability ($p^G + (1-p)^G$) profiler classifying `GOLDILOCKS`, `TRIVIAL_ZERO_GRAD`, `STARVED_ZERO_GRAD`, and `FLAKY` tasks, with one-command exporters for **`TRL`**, **`veRL`**, **`prime-rl`**, and **`OpenEnv`**.
+
+---
+
+## CLI Command Reference
+
+| Command | Purpose |
+|---|---|
+| `dasv doctor` | Check Python `>=3.11`, Docker/OCI daemon, host/server arch parity, and native CLIs |
+| `dasv inspect <path>` | Auto-detect Harbor / OpenEnv / `verifiers` v1 / HUD environment into canonical `EnvSpec` |
+| `dasv audit <path>` | Execute tiered audit pipeline (`0,1,2,3`), emitting JSON, SARIF 2.1.0, HTML & `manifest.json` |
+| `dasv mutate <path>` | Run \$0 deterministic Anti-Patch & *ImpossibleBench* mutation suite (`--dry-run` supported) |
+| `dasv redteam <path>` | Run budget-capped Tier 2 adversarial Hacker-Fixer loop & 3-invariant Gold-Sanity Gate |
+| `dasv rubric <path>` | Run *ProRubric* additive-loophole/fluff checks & *CHERRL* cross-family judge divergence |
+| `dasv profile <path>` | Profile RLVR advantage variance & zero-gradient compute waste (`--traces` for \$0 offline mode) |
+| `dasv export` | Export certified `GOLDILOCKS` curricula & exploit traces to `trl`, `verl`, `prime_rl`, or `openenv` |
+| `dasv report <report.json>` | Re-render validated JSON, SARIF 2.1.0, or offline zero-CDN HTML from an existing report |
+
+### Deterministic Exit Codes
+
+| Exit Code | Meaning |
+|---|---|
+| `0` | Audit passed (no findings at or above `--fail-on`) |
+| `1` | Audit failed (finding(s) met or exceeded `--fail-on` severity threshold) |
+| `2` | Configuration or CLI validation error |
+| `3` | Runtime or Docker/sandbox execution error |
+| `4` | Hard USD or token budget ceiling reached (`BudgetGuard` tripped; partial results saved) |
+| `5` | Required native validator missing or failed (`--require-native`) |
+
+---
+
+## Development & Reproducibility
+
+```bash
+uv sync --frozen
+uv run ruff format --check .
+uv run ruff check src tests recipes scripts
+uv run pyright
+uv run pytest -v
+```
+
+Reproduce the **45-task public audit** (`KPI-RES-02`) or **controlled 3-arm LoRA-Dr.GRPO ablation** (`KPI-RES-03`):
+- Public audit script & report: [`scripts/run_public_audit.py`](./scripts/run_public_audit.py) → [`results/public_audit/AUDIT_REPORT.md`](./results/public_audit/AUDIT_REPORT.md)
+- GPU ablation recipe & CPU dry-run: [`recipes/lora_dr_grpo_ablation/README.md`](./recipes/lora_dr_grpo_ablation/README.md)
+
+---
+
+## Documentation Index
+
+| Document | Description |
+|---|---|
+| [docs/TECHNICAL-REPORT.md](./docs/TECHNICAL-REPORT.md) | Full arXiv-style empirical technical report (`KPI-RES-01/02/03`) |
+| [results/public_audit/AUDIT_REPORT.md](./results/public_audit/AUDIT_REPORT.md) | 45-environment public audit report + offline HTML certification cards |
+| [CHANGELOG.md](./CHANGELOG.md) | Release history and semantic versioning notes |
+| [docs/RESEARCH-DOSSIER.md](./docs/RESEARCH-DOSSIER.md) | 2025–2026 RLVR post-training, rubric RL & reward-hacking literature review |
+| [docs/00-CHARTER.md](./docs/00-CHARTER.md) | Project Charter & scope guardrails |
+| [docs/01-BRD.md](./docs/01-BRD.md) | Business Requirements (`BRD-REQ-01`–`18`) & KPI definitions |
+| [docs/02-PRD-FEATURES.md](./docs/02-PRD-FEATURES.md) | PRD (`FEAT-01`–`22`) & frozen CLI / Pydantic v2 SDK contract |
+| [docs/03-ARCHITECTURE.md](./docs/03-ARCHITECTURE.md) | 4-Plane Architecture & Architecture Decision Records (`ADR-001`–`007`) |
+| [docs/04-DESIGN-SANDBOX-RUNTIME.md](./docs/04-DESIGN-SANDBOX-RUNTIME.md) | `SDD-01`: Orchestrator, `BudgetGuard`, Sandbox Runtime & Probes |
+| [docs/04-DESIGN-VERIFIER-ENGINE.md](./docs/04-DESIGN-VERIFIER-ENGINE.md) | `SDD-02`: Clean-Image Grader, Mutators, Hacker-Fixer & Rubric Engine |
+| [docs/04-DESIGN-INTEROP-ADAPTERS.md](./docs/04-DESIGN-INTEROP-ADAPTERS.md) | `SDD-03`: Interop Adapters & `NativeDelegateRunner` |
+| [docs/04-DESIGN-TELEMETRY-EVAL.md](./docs/04-DESIGN-TELEMETRY-EVAL.md) | `SDD-04`: `pass@k`/`pass^k`, `HackabilityScore`, Grade `A–F` & SARIF/HTML |
+| [docs/04-DESIGN-RL-INTEGRATION.md](./docs/04-DESIGN-RL-INTEGRATION.md) | `SDD-05`: RL Exporters, LoRA-Dr.GRPO Ablation & Logprob-Drift Hook |
 
 ---
 

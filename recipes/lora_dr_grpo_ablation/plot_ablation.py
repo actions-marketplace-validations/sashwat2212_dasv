@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import math
+import statistics
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -178,6 +180,8 @@ def build_ablation_svgs(
 def compute_ablation_significance(
     arm1_eval: dict[str, Any],
     arm2_eval: dict[str, Any],
+    *,
+    arm0_eval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute paired bootstrap + exact McNemar p-values from final heldout_eval records."""
     s1: dict[str, int] = arm1_eval.get("per_task_successes", {})
@@ -197,15 +201,156 @@ def compute_ablation_significance(
     mcnemar = (
         mcnemar_exact_p_value(p1_bool, p2_bool) if p1_bool and len(p1_bool) == len(p2_bool) else {}
     )
+    mcnemar_pass_at_k = mcnemar_exact_p_value(
+        [s1[tid] > 0 for tid in shared_ids],
+        [s2[tid] > 0 for tid in shared_ids],
+    )
     ci1 = wilson_ci(sum(1 for x in p1_bool if x), len(p1_bool)) if p1_bool else (0.0, 0.0)
     ci2 = wilson_ci(sum(1 for x in p2_bool if x), len(p2_bool)) if p2_bool else (0.0, 0.0)
 
-    return {
+    out: dict[str, Any] = {
         "paired_tasks": len(shared_ids),
         "arm1_wilson_95_ci": list(ci1),
         "arm2_wilson_95_ci": list(ci2),
         "paired_bootstrap": boot,
         "mcnemar_exact": mcnemar,
+        "mcnemar_pass_at_k": mcnemar_pass_at_k,
+    }
+
+    if arm0_eval is not None:
+        s0: dict[str, int] = arm0_eval.get("per_task_successes", {})
+        k0 = max(1, int(arm0_eval.get("k", 1)))
+        shared_0 = sorted(set(s0.keys()) & set(shared_ids))
+        if shared_0:
+            rates_0 = [s0[tid] / k0 for tid in shared_0]
+            rates_1_0 = [s1[tid] / k1 for tid in shared_0]
+            rates_2_0 = [s2[tid] / k2 for tid in shared_0]
+            out["arm1_vs_arm0_bootstrap"] = paired_bootstrap_test(rates_0, rates_1_0)
+            out["arm2_vs_arm0_bootstrap"] = paired_bootstrap_test(rates_0, rates_2_0)
+
+    return out
+
+
+def compute_multiseed_summary(seed_dirs: list[Path]) -> dict[str, Any]:
+    """Aggregate Arm 0 / Arm 1 / Arm 2 final held-out & hacking telemetry across >=1 seeds."""
+    per_seed: list[dict[str, Any]] = []
+    pooled_arm0_by_task: dict[str, list[float]] = {}
+    pooled_arm1_by_task: dict[str, list[float]] = {}
+    pooled_arm2_by_task: dict[str, list[float]] = {}
+
+    for seed_dir in sorted(seed_dirs):
+        arm0_m_path = seed_dir / "arm0" / "manifest.json"
+        arm1_eval_path = seed_dir / "arm1" / "heldout_eval.jsonl"
+        arm2_eval_path = seed_dir / "arm2" / "heldout_eval.jsonl"
+        arm1_metrics_path = seed_dir / "arm1" / "metrics.jsonl"
+        arm2_metrics_path = seed_dir / "arm2" / "metrics.jsonl"
+        if not (arm1_eval_path.is_file() and arm2_eval_path.is_file()):
+            continue
+
+        arm1_final = load_arm_metrics(arm1_eval_path)[-1]
+        arm2_final = load_arm_metrics(arm2_eval_path)[-1]
+        arm0_eval: dict[str, Any] | None = None
+        if arm0_m_path.is_file():
+            m0 = cast(dict[str, Any], json.loads(arm0_m_path.read_text(encoding="utf-8")))
+            raw_a0 = m0.get("arm0_eval")
+            if isinstance(raw_a0, dict):
+                arm0_eval = cast(dict[str, Any], raw_a0)
+
+        a1_rows = load_arm_metrics(arm1_metrics_path) if arm1_metrics_path.is_file() else []
+        a2_rows = load_arm_metrics(arm2_metrics_path) if arm2_metrics_path.is_file() else []
+        a1_gap_mean = (
+            statistics.fmean(float(r.get("hack_divergence_gap", 0.0)) for r in a1_rows)
+            if a1_rows
+            else 0.0
+        )
+        a2_gap_mean = (
+            statistics.fmean(float(r.get("hack_divergence_gap", 0.0)) for r in a2_rows)
+            if a2_rows
+            else 0.0
+        )
+
+        k1 = max(1, int(arm1_final.get("k", 1)))
+        k2 = max(1, int(arm2_final.get("k", 1)))
+        for tid, succ in cast(dict[str, int], arm1_final.get("per_task_successes", {})).items():
+            pooled_arm1_by_task.setdefault(tid, []).append(succ / k1)
+        for tid, succ in cast(dict[str, int], arm2_final.get("per_task_successes", {})).items():
+            pooled_arm2_by_task.setdefault(tid, []).append(succ / k2)
+        if arm0_eval is not None:
+            k0 = max(1, int(arm0_eval.get("k", 1)))
+            for tid, succ in cast(dict[str, int], arm0_eval.get("per_task_successes", {})).items():
+                pooled_arm0_by_task.setdefault(tid, []).append(succ / k0)
+
+        per_seed.append(
+            {
+                "seed_dir": seed_dir.name,
+                "arm0_pass_at_1": (
+                    float(arm0_eval.get("clean_heldout_pass_at_1", 0.0))
+                    if arm0_eval is not None
+                    else None
+                ),
+                "arm1_pass_at_1": float(arm1_final.get("clean_heldout_pass_at_1", 0.0)),
+                "arm1_pass_at_k": float(arm1_final.get("clean_heldout_pass_at_k", 0.0)),
+                "arm1_pass_pow_k": float(arm1_final.get("clean_heldout_pass_pow_k", 0.0)),
+                "arm1_mean_hack_gap": round(a1_gap_mean, 6),
+                "arm2_pass_at_1": float(arm2_final.get("clean_heldout_pass_at_1", 0.0)),
+                "arm2_pass_at_k": float(arm2_final.get("clean_heldout_pass_at_k", 0.0)),
+                "arm2_pass_pow_k": float(arm2_final.get("clean_heldout_pass_pow_k", 0.0)),
+                "arm2_mean_hack_gap": round(a2_gap_mean, 6),
+                "significance": compute_ablation_significance(
+                    arm1_final, arm2_final, arm0_eval=arm0_eval
+                ),
+            }
+        )
+
+    def _mean_std(vals: list[float]) -> dict[str, float]:
+        if not vals:
+            return {"mean": 0.0, "std": 0.0}
+        mu = statistics.fmean(vals)
+        sd = statistics.stdev(vals) if len(vals) > 1 else 0.0
+        return {"mean": round(mu, 6), "std": round(sd if math.isfinite(sd) else 0.0, 6)}
+
+    shared_tasks = sorted(set(pooled_arm1_by_task.keys()) & set(pooled_arm2_by_task.keys()))
+    pooled_arm1_rates = [statistics.fmean(pooled_arm1_by_task[t]) for t in shared_tasks]
+    pooled_arm2_rates = [statistics.fmean(pooled_arm2_by_task[t]) for t in shared_tasks]
+    pooled_boot_2v1 = (
+        paired_bootstrap_test(pooled_arm1_rates, pooled_arm2_rates) if shared_tasks else {}
+    )
+
+    shared_0 = sorted(set(pooled_arm0_by_task.keys()) & set(shared_tasks))
+    pooled_boot_1v0 = (
+        paired_bootstrap_test(
+            [statistics.fmean(pooled_arm0_by_task[t]) for t in shared_0],
+            [statistics.fmean(pooled_arm1_by_task[t]) for t in shared_0],
+        )
+        if shared_0
+        else {}
+    )
+    pooled_boot_2v0 = (
+        paired_bootstrap_test(
+            [statistics.fmean(pooled_arm0_by_task[t]) for t in shared_0],
+            [statistics.fmean(pooled_arm2_by_task[t]) for t in shared_0],
+        )
+        if shared_0
+        else {}
+    )
+
+    return {
+        "n_seeds": len(per_seed),
+        "n_tasks": len(shared_tasks),
+        "seeds": per_seed,
+        "summary": {
+            "arm1_pass_at_1": _mean_std([float(s["arm1_pass_at_1"]) for s in per_seed]),
+            "arm1_pass_at_k": _mean_std([float(s["arm1_pass_at_k"]) for s in per_seed]),
+            "arm1_pass_pow_k": _mean_std([float(s["arm1_pass_pow_k"]) for s in per_seed]),
+            "arm1_mean_hack_gap": _mean_std([float(s["arm1_mean_hack_gap"]) for s in per_seed]),
+            "arm2_pass_at_1": _mean_std([float(s["arm2_pass_at_1"]) for s in per_seed]),
+            "arm2_pass_at_k": _mean_std([float(s["arm2_pass_at_k"]) for s in per_seed]),
+            "arm2_pass_pow_k": _mean_std([float(s["arm2_pass_pow_k"]) for s in per_seed]),
+            "arm2_mean_hack_gap": _mean_std([float(s["arm2_mean_hack_gap"]) for s in per_seed]),
+        },
+        "pooled_arm2_vs_arm1_bootstrap": pooled_boot_2v1,
+        "pooled_arm1_vs_arm0_bootstrap": pooled_boot_1v0,
+        "pooled_arm2_vs_arm0_bootstrap": pooled_boot_2v0,
     }
 
 
@@ -323,25 +468,53 @@ def render_ablation_comparison_html(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot Arm 0/1/2 RLVR ablation metrics & SVGs.")
     parser.add_argument("--arm0", type=Path, default=None, help="Optional Arm 0 manifest.json")
-    parser.add_argument("--arm1", type=Path, required=True, help="Arm 1 (unhardened) metrics JSONL")
-    parser.add_argument("--arm2", type=Path, required=True, help="Arm 2 (hardened) metrics JSONL")
+    parser.add_argument("--arm1", type=Path, default=None, help="Arm 1 (unhardened) metrics JSONL")
+    parser.add_argument("--arm2", type=Path, default=None, help="Arm 2 (hardened) metrics JSONL")
     parser.add_argument("--arm1-eval", type=Path, default=None, help="Arm 1 heldout_eval.jsonl")
     parser.add_argument("--arm2-eval", type=Path, default=None, help="Arm 2 heldout_eval.jsonl")
-    parser.add_argument("--out", type=Path, required=True, help="Output zero-CDN HTML report path")
+    parser.add_argument("--out", type=Path, default=None, help="Output zero-CDN HTML report path")
     parser.add_argument("--svg-dir", type=Path, default=None, help="Optional standalone SVG dir")
+    parser.add_argument(
+        "--seeds-dir",
+        type=Path,
+        default=None,
+        help="Optional parent dir containing seed_* subdirs for multi-seed pooling JSON output.",
+    )
+    parser.add_argument(
+        "--multiseed-out",
+        type=Path,
+        default=None,
+        help="Output JSON path for --seeds-dir multi-seed summary.",
+    )
     args = parser.parse_args()
 
+    if args.seeds_dir is not None:
+        seed_dirs = sorted(p for p in args.seeds_dir.glob("seed_*") if p.is_dir())
+        summary = compute_multiseed_summary(seed_dirs)
+        out_json = args.multiseed_out or (args.seeds_dir / "multiseed_summary.json")
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        out_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        if args.arm1 is None or args.arm2 is None or args.out is None:
+            return
+
+    if args.arm1 is None or args.arm2 is None or args.out is None:
+        parser.error("--arm1, --arm2, and --out are required unless --seeds-dir is used alone.")
+
     arm0_p1: float | None = None
+    arm0_eval: dict[str, Any] | None = None
     if args.arm0 and args.arm0.is_file():
-        m0 = json.loads(args.arm0.read_text(encoding="utf-8"))
-        arm0_p1 = float(m0.get("arm0_eval", {}).get("clean_heldout_pass_at_1", 0.0))
+        m0 = cast(dict[str, Any], json.loads(args.arm0.read_text(encoding="utf-8")))
+        raw_eval = m0.get("arm0_eval")
+        if isinstance(raw_eval, dict):
+            arm0_eval = cast(dict[str, Any], raw_eval)
+            arm0_p1 = float(arm0_eval.get("clean_heldout_pass_at_1", 0.0))
 
     sig: dict[str, Any] | None = None
     if args.arm1_eval and args.arm2_eval and args.arm1_eval.is_file() and args.arm2_eval.is_file():
         e1 = load_arm_metrics(args.arm1_eval)
         e2 = load_arm_metrics(args.arm2_eval)
         if e1 and e2:
-            sig = compute_ablation_significance(e1[-1], e2[-1])
+            sig = compute_ablation_significance(e1[-1], e2[-1], arm0_eval=arm0_eval)
 
     u_rows = load_arm_metrics(args.arm1)
     h_rows = load_arm_metrics(args.arm2)

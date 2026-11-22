@@ -10,6 +10,7 @@ import pytest
 from recipes.lora_dr_grpo_ablation.plot_ablation import (
     build_ablation_svgs,
     compute_ablation_significance,
+    compute_multiseed_summary,
     render_ablation_comparison_html,
 )
 from recipes.lora_dr_grpo_ablation.prepare_taskset import (
@@ -299,3 +300,64 @@ def test_all_synthetic_corpus_tasks_pass_oracle_and_fail_noop() -> None:
     assert len(corpus) == 20
     for task in corpus:
         assert verify_task_oracle_and_noop(task), f"Oracle/noop sanity failed on {task.task_id}"
+
+
+def test_multiseed_summary_and_arm0_significance(tmp_path: Path) -> None:
+    """Verify multi-seed pooling + Arm 2 vs Arm 0/Arm 1 paired bootstrap & pass@k McNemar."""
+    for seed_name, boost in (("seed_42", 0), ("seed_1337", 1)):
+        sdir = tmp_path / seed_name
+        for arm in ("arm0", "arm1", "arm2"):
+            (sdir / arm).mkdir(parents=True)
+        a0_succ = {f"t{i}": (4 if i < 6 else 0) for i in range(20)}
+        a1_succ = {f"t{i}": (4 if i < 7 else 0) for i in range(20)}
+        a2_succ = {f"t{i}": (4 if i < (12 + boost) else 0) for i in range(20)}
+        (sdir / "arm0" / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "arm0_eval": {
+                        "k": 4,
+                        "clean_heldout_pass_at_1": 0.30,
+                        "per_task_successes": a0_succ,
+                        "per_task_first_passed": [v > 0 for v in a0_succ.values()],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        for arm, succ, gap in (("arm1", a1_succ, 0.08), ("arm2", a2_succ, 0.0)):
+            p1 = sum(succ.values()) / (20 * 4)
+            (sdir / arm / "heldout_eval.jsonl").write_text(
+                json.dumps(
+                    {
+                        "step": 160,
+                        "k": 4,
+                        "clean_heldout_pass_at_1": p1,
+                        "clean_heldout_pass_at_k": sum(1 for v in succ.values() if v > 0) / 20,
+                        "clean_heldout_pass_pow_k": p1,
+                        "per_task_successes": succ,
+                        "per_task_first_passed": [v > 0 for v in succ.values()],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (sdir / arm / "metrics.jsonl").write_text(
+                json.dumps({"step": 160, "train_reward": p1 + gap, "hack_divergence_gap": gap})
+                + "\n",
+                encoding="utf-8",
+            )
+
+    summary = compute_multiseed_summary([tmp_path / "seed_42", tmp_path / "seed_1337"])
+    assert summary["n_seeds"] == 2
+    assert summary["n_tasks"] == 20
+    assert (
+        summary["summary"]["arm2_pass_at_1"]["mean"] > summary["summary"]["arm1_pass_at_1"]["mean"]
+    )
+    assert summary["summary"]["arm1_mean_hack_gap"]["mean"] == pytest.approx(0.08)
+    assert summary["summary"]["arm2_mean_hack_gap"]["mean"] == pytest.approx(0.0)
+    assert summary["pooled_arm2_vs_arm1_bootstrap"]["delta_mean"] > 0.20
+    assert summary["pooled_arm2_vs_arm0_bootstrap"]["delta_mean"] > 0.25
+    seed42_entry = next(s for s in summary["seeds"] if s["seed_dir"] == "seed_42")
+    seed42_sig = seed42_entry["significance"]
+    assert seed42_sig["mcnemar_pass_at_k"]["only_b"] == 5
+    assert seed42_sig["arm2_vs_arm0_bootstrap"]["delta_mean"] == pytest.approx(0.30, abs=1e-5)
