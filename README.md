@@ -1,14 +1,15 @@
 <p align="center">
-  <img src="./docs/assets/dasv-hero.png" alt="dasv — Deterministic Adversarial Sandbox Verifier" width="100%" />
+  <img src="https://raw.githubusercontent.com/sashwat2212/dasv/main/docs/assets/dasv-hero.png" alt="dasv — Deterministic Adversarial Sandbox Verifier" width="100%" />
 </p>
 
 # `dasv` — Deterministic Adversarial Sandbox Verifier
 
 [![CI](https://github.com/sashwat2212/dasv/actions/workflows/ci.yml/badge.svg)](https://github.com/sashwat2212/dasv/actions/workflows/ci.yml)
 [![dasv-action](https://github.com/sashwat2212/dasv/actions/workflows/dasv-action-ci.yml/badge.svg)](https://github.com/sashwat2212/dasv/actions/workflows/dasv-action-ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/dasv.svg)](https://pypi.org/project/dasv/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](./LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/dasv?color=blue&label=PyPI)](https://pypi.org/project/dasv/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab.svg)](https://www.python.org/downloads/)
+[![GitHub Action](https://img.shields.io/badge/GitHub_Action-dasv%40v1-2088ff.svg?logo=github-actions&logoColor=white)](https://github.com/sashwat2212/dasv/blob/main/action.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e.svg)](./LICENSE)
 
 **Pre-flight adversarial security, construct-validity, and RLVR policy-gradient signal auditor for RL post-training environments.**
 
@@ -26,9 +27,21 @@
 | **Real Public RL Env Audit** (`KPI-RES-02`) | **45 public tasks** across `terminal-bench-2` (28), `verifiers` (10), `OpenEnv` (7) at **\$0.00 API spend** | **100%** of containerized tasks (35/35) unpinned (`RULE-HERM-001`) & internet-enabled (`RULE-BNDY-002`); **2 concrete `COPY tests/` leaks** (`RULE-BNDY-001`); live *CHERRL* fluff-hack judge divergence on `color-codeword` ($\tau_b = 0.177$) |
 | **Causal LoRA-Dr.GRPO Ablation** (`KPI-RES-03`) | `Qwen2.5-Coder-3B-Instruct`, 160 steps/seed × **2 seeds (`42`, `1337`)** on 1× NVIDIA L4 (`N=64` unseen tasks, 512 rollouts/arm) | Unhardened **Arm 1** had *higher* mean train reward (`48.90%` vs `47.29%`, hack gap up to `+31.25 pp` on `47/320` steps) yet **non-significant** pooled held-out gains (`pass@1` `+2.34 pp`, $p=0.268$; `pass^4` `+5.14 pp`, $p=0.064$) & `-4.69 pp` `pass@4` drop. `dasv`-Hardened **Arm 2** eliminated hacking (`0/320` steps), beat Arm 1 on **both seeds (2/2)**, cut `pass^4` variance **2.2×**, and achieved **statistically significant** pooled lift: **`+3.71 pp` `pass@1`** ($p=0.0456$), **`+7.03 pp` `pass^4`** ($p=0.0072$), and **`+10.75 pp` MBPP+ `pass^4`** ($p=0.0088$) |
 
-![dasv Controlled RLVR Ablation: Reward and Clean Held-Out pass@1](./results/v1_ablation/seed_42/svgs/ablation_reward_and_heldout.svg)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sashwat2212/dasv/main/assets/social/linkedin_x_hero_2seed_ablation.png" alt="dasv Controlled 2-Seed LoRA-Dr.GRPO RLVR Ablation Summary" width="100%" />
+</p>
 
-![dasv Controlled RLVR Ablation: Hacking Divergence Gap and Tamper Rate](./results/v1_ablation/seed_42/svgs/ablation_hacking_and_tamper.svg)
+<details>
+<summary><b>View per-seed telemetry charts (Seed 42 &amp; Seed 1337)</b></summary>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sashwat2212/dasv/main/results/v1_ablation/pngs/seed_42_reward_and_heldout.png" alt="Seed 42 Reward and Clean Held-Out pass@1" width="100%" />
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sashwat2212/dasv/main/results/v1_ablation/pngs/seed_1337_hacking_and_tamper.png" alt="Seed 1337 Hacking Divergence Gap and Tamper Rate" width="100%" />
+</p>
+
+</details>
 
 ---
 
@@ -113,7 +126,9 @@ Outputs exposed to downstream workflow steps: `grade` (`A–F`), `hackability-sc
 
 ## Architecture: 4 Planes & 4 Cost-Aware Tiers
 
-![dasv 4-Plane Isolation and Cost-Aware Verification Funnel](./docs/assets/dasv-architecture.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sashwat2212/dasv/main/docs/assets/dasv-architecture.png" alt="dasv 4-Plane Isolation and Cost-Aware Verification Funnel" width="100%" />
+</p>
 
 `dasv` enforces strict isolation between the **Untrusted Execution Plane** (`--network=none`, `--cap-drop=ALL`, `--pids-limit`, zero host secrets) and the **Trusted Verification Plane** (**Clean-Image Out-of-Container Grading** against a pristine OCI digest):
 
@@ -187,6 +202,23 @@ Reproduce the **45-task public audit** (`KPI-RES-02`) or **controlled 3-arm LoRA
 
 ---
 
-## License
+## Citation
 
-Apache License 2.0 — see [LICENSE](./LICENSE).
+If you use `dasv`, the 45-environment public audit dataset, or the LoRA-Dr.GRPO ablation recipe in academic or industrial work, cite it via [`CITATION.cff`](./CITATION.cff):
+
+```bibtex
+@software{dasv2026,
+  title   = {dasv: Deterministic Adversarial Sandbox Verifier},
+  author  = {{dasv contributors}},
+  year    = {2026},
+  version = {1.0.1},
+  url     = {https://github.com/sashwat2212/dasv},
+  license = {Apache-2.0}
+}
+```
+
+## Contributing, Security & License
+
+- **Contributing**: See [CONTRIBUTING.md](./CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+- **Security**: Report vulnerabilities privately per [SECURITY.md](./SECURITY.md).
+- **License**: Apache License 2.0 — see [LICENSE](./LICENSE).

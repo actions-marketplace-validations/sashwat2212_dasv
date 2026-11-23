@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability Disclosure
+    url: https://github.com/sashwat2212/dasv/blob/main/SECURITY.md
+    about: Report security issues privately instead of opening a public issue.
+  - name: Questions & Community Discussions
+    url: https://github.com/sashwat2212/dasv/discussions
+    about: Ask usage questions, share audit results, or discuss new adapters.

@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "dasv: Deterministic Adversarial Sandbox Verifier"
+message: "If you use dasv, its 45-environment public audit dataset, or the LoRA-Dr.GRPO ablation recipe in your research, please cite it as below."
+type: software
+authors:
+  - name: "dasv contributors"
+repository-code: "https://github.com/sashwat2212/dasv"
+url: "https://pypi.org/project/dasv/"
+license: Apache-2.0
+version: "1.0.1"
+date-released: "2026-11-23"
+keywords:
+  - rlvr
+  - post-training
+  - reinforcement-learning
+  - reward-hacking
+  - sandbox-security
+  - grpo
+  - verifier-auditing
+  - sarif
+abstract: >-
+  Pre-flight adversarial security, construct-validity, and RLVR policy-gradient
+  signal auditor for Harbor, OpenEnv, Prime Intellect verifiers v1, and HUD
+  post-training environments.

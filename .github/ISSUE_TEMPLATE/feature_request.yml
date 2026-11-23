@@ -1,0 +1,24 @@
+name: Feature or Adapter Request
+description: Propose a new audit rule, RL ecosystem adapter, or trainer exporter
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Ecosystem Gap
+      description: What RL environment defect, benchmark standard, or RLVR trainer workflow should dasv support?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe the rule ID, CLI flags, adapter interface, or exporter format you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References / Upstream Links
+      description: Links to papers, upstream specs, or example environments (optional).

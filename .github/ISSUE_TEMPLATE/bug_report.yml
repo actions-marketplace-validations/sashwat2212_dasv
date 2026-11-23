@@ -1,0 +1,47 @@
+name: Bug Report
+description: Report a bug, false positive, or false negative in dasv
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting an issue! Please include enough detail so we can reproduce it deterministically.
+  - type: input
+    id: version
+    attributes:
+      label: dasv version & OS
+      description: Output of `dasv --version` and `dasv doctor`
+      placeholder: "dasv 1.0.1 / Ubuntu 24.04 x86_64"
+    validations:
+      required: true
+  - type: dropdown
+    id: adapter
+    attributes:
+      label: Environment Standard / Component
+      options:
+        - Harbor
+        - OpenEnv
+        - Prime Intellect verifiers v1
+        - HUD
+        - Tier 1 Mutations / Determinism
+        - Tier 2 Red-Team / Rubrics
+        - Tier 3 Signal Profiler / Exporters
+        - GitHub Action (dasv-action) / SARIF
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction Steps & Command
+      description: Exact CLI command and minimal environment fixture needed to reproduce
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. Actual Behavior
+      description: What did you expect `dasv` to report, and what happened instead?
+    validations:
+      required: true
