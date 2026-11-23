@@ -4,7 +4,7 @@ All notable changes to **`dasv`** (*Deterministic Adversarial Sandbox Verifier*)
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-11-23
 
 ### Added
 - **Multi-seed ablation aggregator & extended significance tests** in `recipes/lora_dr_grpo_ablation/plot_ablation.py` (`--seeds-dir`, `compute_multiseed_summary`, `Arm 2 vs Arm 0` / `Arm 1 vs Arm 0` paired bootstrap, and `pass@k` exact McNemar).
