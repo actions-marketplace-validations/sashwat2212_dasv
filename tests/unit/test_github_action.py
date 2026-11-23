@@ -1,21 +1,41 @@
-"""Validation tests for the drop-in Composite GitHub Action `action/action.yml` (FEAT-22)."""
+"""Validation tests for the Composite GitHub Action (`./action.yml` & `action/action.yml`)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml
 
-ACTION_YML = Path(__file__).resolve().parents[2] / "action" / "action.yml"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ROOT_ACTION_YML = REPO_ROOT / "action.yml"
+SUBDIR_ACTION_YML = REPO_ROOT / "action" / "action.yml"
 
 
-def test_github_action_manifest_structure_and_injection_safety() -> None:
-    assert ACTION_YML.is_file()
-    data = cast(dict[str, Any], yaml.safe_load(ACTION_YML.read_text(encoding="utf-8")))
+def test_root_and_subdir_action_manifests_are_identical() -> None:
+    """Root Marketplace `./action.yml` and legacy `action/action.yml` must never drift."""
+    assert ROOT_ACTION_YML.is_file()
+    assert SUBDIR_ACTION_YML.is_file()
+    assert ROOT_ACTION_YML.read_text(encoding="utf-8") == SUBDIR_ACTION_YML.read_text(
+        encoding="utf-8"
+    )
 
-    assert data["name"]
-    assert data["description"]
+
+@pytest.mark.parametrize("action_path", [ROOT_ACTION_YML, SUBDIR_ACTION_YML])
+def test_github_action_manifest_structure_and_injection_safety(action_path: Path) -> None:
+    assert action_path.is_file()
+    data = cast(dict[str, Any], yaml.safe_load(action_path.read_text(encoding="utf-8")))
+
+    name = str(data["name"])
+    description = str(data["description"]).strip()
+    assert name and len(name) <= 100
+    assert description and len(description) <= 125
+    assert not description.endswith(".")
+
+    branding = cast(dict[str, Any], data["branding"])
+    assert branding.get("icon") == "shield"
+    assert branding.get("color") == "blue"
 
     inputs = cast(dict[str, Any], data["inputs"])
     for req_input in (

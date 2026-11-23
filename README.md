@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./docs/assets/dasv-hero.png" alt="dasv — Deterministic Adversarial Sandbox Verifier" width="100%" />
+</p>
+
 # `dasv` — Deterministic Adversarial Sandbox Verifier
 
 [![CI](https://github.com/sashwat2212/dasv/actions/workflows/ci.yml/badge.svg)](https://github.com/sashwat2212/dasv/actions/workflows/ci.yml)
@@ -93,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: sashwat2212/dasv/action@v1.0.0
+      - uses: sashwat2212/dasv@v1
         with:
           path: ./envs/my_task
           tiers: "0,1"
@@ -101,11 +105,15 @@ jobs:
           fail-on: high
 ```
 
+*(The subdirectory alias `sashwat2212/dasv/action@v1` also remains supported for backwards compatibility.)*
+
 Outputs exposed to downstream workflow steps: `grade` (`A–F`), `hackability-score` (`0–100`), `sarif-file`, `html-file`, `report-json`, and `exit-code`.
 
 ---
 
 ## Architecture: 4 Planes & 4 Cost-Aware Tiers
+
+![dasv 4-Plane Isolation and Cost-Aware Verification Funnel](./docs/assets/dasv-architecture.png)
 
 `dasv` enforces strict isolation between the **Untrusted Execution Plane** (`--network=none`, `--cap-drop=ALL`, `--pids-limit`, zero host secrets) and the **Trusted Verification Plane** (**Clean-Image Out-of-Container Grading** against a pristine OCI digest):
 

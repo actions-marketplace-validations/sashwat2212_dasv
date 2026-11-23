@@ -1,8 +1,5 @@
 name: "dasv RL Verifier Audit"
-description: >-
-  Deterministic Adversarial Sandbox Verifier (dasv) — gate RL environment PRs on
-  Tier 0-1 boundary security, clean-image Oracle/No-op determinism, mutations,
-  inline SARIF 2.1.0 Code Scanning annotations, and offline HTML Certification Cards.
+description: "Gate RL environment PRs on verifier security, clean-image determinism, mutations, SARIF alerts, and HTML cards"
 author: "dasv contributors"
 
 branding:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dasv"
-version = "1.0.0"
+version = "1.0.1"
 description = "Deterministic Adversarial Sandbox Verifier — pre-flight adversarial security, construct-validity, and RLVR policy-gradient signal auditor for RL post-training environments."
 readme = "README.md"
 license = { text = "Apache-2.0" }

@@ -19,9 +19,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run dasv-action (Tier 0 + SARIF + Offline HTML)
+      - name: Run root dasv-action (Marketplace entrypoint + SARIF + Offline HTML)
         id: dasv
-        uses: ./action
+        uses: ./
         with:
           path: benchmarks/planted_vulns/hardened/01_hardened_calculator
           tiers: "0"
@@ -31,7 +31,24 @@ jobs:
           upload-sarif: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           upload-html-artifact: "true"
 
-      - name: Assert Grade A output
+      - name: Verify backwards-compatible ./action alias
+        id: dasv-compat
+        uses: ./action
+        with:
+          path: benchmarks/planted_vulns/hardened/01_hardened_calculator
+          tiers: "0"
+          native: "false"
+          fail-on: high
+          dasv-package: "."
+          out-dir: dasv-artifacts-compat
+          sarif-file: dasv-artifacts-compat/dasv.sarif
+          html-file: dasv-artifacts-compat/dasv.html
+          upload-sarif: "false"
+          upload-html-artifact: "false"
+
+      - name: Assert Grade A output on both entrypoints
         run: |
-          echo "Grade=${{ steps.dasv.outputs.grade }} Score=${{ steps.dasv.outputs.hackability-score }}"
+          echo "Root Grade=${{ steps.dasv.outputs.grade }} Score=${{ steps.dasv.outputs.hackability-score }}"
+          echo "Compat Grade=${{ steps.dasv-compat.outputs.grade }} Score=${{ steps.dasv-compat.outputs.hackability-score }}"
           test "${{ steps.dasv.outputs.grade }}" = "A"
+          test "${{ steps.dasv-compat.outputs.grade }}" = "A"

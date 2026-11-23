@@ -1,0 +1,209 @@
+name: "dasv RL Verifier Audit"
+description: "Gate RL environment PRs on verifier security, clean-image determinism, mutations, SARIF alerts, and HTML cards"
+author: "dasv contributors"
+
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  path:
+    description: "Path to the RL environment directory (Harbor, OpenEnv, verifiers v1, or HUD)."
+    required: false
+    default: "."
+  tiers:
+    description: "Comma-separated audit tiers to execute (e.g., '0' or '0,1')."
+    required: false
+    default: "0,1"
+  replays:
+    description: "Tier 1 Oracle replay count N."
+    required: false
+    default: "10"
+  noop-replays:
+    description: "Tier 1 No-op replay count M."
+    required: false
+    default: "3"
+  with-mutations:
+    description: "Run $0 deterministic anti-patch & ImpossibleBench mutations inside Tier 1."
+    required: false
+    default: "false"
+  fail-on:
+    description: "Minimum finding severity to fail the check (critical|high|medium|low)."
+    required: false
+    default: "high"
+  format:
+    description: "Optional adapter override (harbor|openenv|verifiers_v1|hud)."
+    required: false
+    default: ""
+  config:
+    description: "Optional path to dasv.toml."
+    required: false
+    default: ""
+  native:
+    description: "Delegate baseline lint checks to installed native CLIs (true|false)."
+    required: false
+    default: "true"
+  out-dir:
+    description: "Directory where report.json and manifest.json will be written."
+    required: false
+    default: "dasv-artifacts"
+  sarif-file:
+    description: "Output path for SARIF 2.1.0 Code Scanning report."
+    required: false
+    default: "dasv-artifacts/dasv.sarif"
+  html-file:
+    description: "Output path for zero-CDN offline HTML Certification Report."
+    required: false
+    default: "dasv-artifacts/dasv.html"
+  upload-sarif:
+    description: "Upload SARIF report to GitHub Code Scanning via github/codeql-action/upload-sarif."
+    required: false
+    default: "true"
+  upload-html-artifact:
+    description: "Upload HTML Certification Report and JSON artifacts via actions/upload-artifact."
+    required: false
+    default: "true"
+  dasv-package:
+    description: "Package spec or local path passed to `uvx --from` (default: 'dasv')."
+    required: false
+    default: "dasv"
+  python-version:
+    description: "Python version installed via astral-sh/setup-uv."
+    required: false
+    default: "3.12"
+
+outputs:
+  grade:
+    description: "Deterministic certification grade (A-F) extracted from report.json."
+    value: ${{ steps.run-dasv.outputs.grade }}
+  hackability-score:
+    description: "Bounded HackabilityScore (0.0-100.0) extracted from report.json."
+    value: ${{ steps.run-dasv.outputs.hackability_score }}
+  sarif-file:
+    description: "Path to emitted SARIF 2.1.0 file."
+    value: ${{ inputs.sarif-file }}
+  html-file:
+    description: "Path to emitted zero-CDN offline HTML Certification Report."
+    value: ${{ inputs.html-file }}
+  report-json:
+    description: "Path to emitted AuditReport JSON file."
+    value: ${{ steps.run-dasv.outputs.report_json }}
+  exit-code:
+    description: "Raw exit code returned by `dasv audit` (0-5)."
+    value: ${{ steps.run-dasv.outputs.exit_code }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+        python-version: ${{ inputs.python-version }}
+
+    - name: Run dasv audit
+      id: run-dasv
+      shell: bash
+      env:
+        DASV_PACKAGE: ${{ inputs.dasv-package }}
+        DASV_PATH: ${{ inputs.path }}
+        DASV_TIERS: ${{ inputs.tiers }}
+        DASV_REPLAYS: ${{ inputs.replays }}
+        DASV_NOOP_REPLAYS: ${{ inputs.noop-replays }}
+        DASV_WITH_MUTATIONS: ${{ inputs.with-mutations }}
+        DASV_FAIL_ON: ${{ inputs.fail-on }}
+        DASV_FORMAT: ${{ inputs.format }}
+        DASV_CONFIG: ${{ inputs.config }}
+        DASV_NATIVE: ${{ inputs.native }}
+        DASV_OUT_DIR: ${{ inputs.out-dir }}
+        DASV_SARIF_FILE: ${{ inputs.sarif-file }}
+        DASV_HTML_FILE: ${{ inputs.html-file }}
+      run: |
+        set -uo pipefail
+        mkdir -p "$DASV_OUT_DIR"
+
+        cmd=(
+          uvx --from "$DASV_PACKAGE" dasv audit "$DASV_PATH"
+          --tiers "$DASV_TIERS"
+          --replays "$DASV_REPLAYS"
+          --noop-replays "$DASV_NOOP_REPLAYS"
+          --fail-on "$DASV_FAIL_ON"
+          --out-dir "$DASV_OUT_DIR"
+          --sarif "$DASV_SARIF_FILE"
+          --html "$DASV_HTML_FILE"
+        )
+
+        if [ "$DASV_WITH_MUTATIONS" = "true" ]; then
+          cmd+=(--with-mutations)
+        fi
+        if [ "$DASV_NATIVE" = "false" ]; then
+          cmd+=(--no-native)
+        fi
+        if [ -n "$DASV_FORMAT" ]; then
+          cmd+=(--format "$DASV_FORMAT")
+        fi
+        if [ -n "$DASV_CONFIG" ]; then
+          cmd+=(--config "$DASV_CONFIG")
+        fi
+
+        set +e
+        "${cmd[@]}"
+        rc=$?
+        set -e
+
+        report_json="${DASV_OUT_DIR}/report.json"
+        echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"
+        echo "report_json=${report_json}" >> "$GITHUB_OUTPUT"
+
+        if [ -f "$report_json" ]; then
+          python3 - "$report_json" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
+        import json, sys
+        report_path, out_path, summary_path = sys.argv[1:4]
+        data = json.loads(open(report_path, encoding="utf-8").read())
+        grade = str(data.get("grade", "UNKNOWN"))
+        score = data.get("hackability_score")
+        score_str = f"{float(score):.2f}" if isinstance(score, (int, float)) else "n/a"
+        task_id = str((data.get("env_spec") or {}).get("task_id", "unknown"))
+        findings = data.get("findings") or []
+        with open(out_path, "a", encoding="utf-8") as fh:
+            fh.write(f"grade={grade}\n")
+            fh.write(f"hackability_score={score_str}\n")
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write(f"### dasv Certification Summary: `{task_id}`\n\n")
+                fh.write("| Metric | Value |\n|---|---|\n")
+                fh.write(f"| **Grade** | **{grade}** |\n")
+                fh.write(f"| **Hackability Score** | `{score_str} / 100.0` |\n")
+                fh.write(f"| **Findings** | `{len(findings)}` |\n")
+        PY
+        else
+          echo "grade=UNKNOWN" >> "$GITHUB_OUTPUT"
+          echo "hackability_score=n/a" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: always() && inputs.upload-sarif == 'true' && hashFiles(inputs.sarif-file) != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+
+    - name: Upload HTML Certification Report & JSON Artifacts
+      if: always() && inputs.upload-html-artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: dasv-certification-report
+        path: |
+          ${{ inputs.out-dir }}
+          ${{ inputs.html-file }}
+          ${{ inputs.sarif-file }}
+        if-no-files-found: warn
+
+    - name: Propagate dasv audit exit code
+      if: steps.run-dasv.outputs.exit_code != '0'
+      shell: bash
+      env:
+        DASV_EXIT_CODE: ${{ steps.run-dasv.outputs.exit_code }}
+      run: |
+        echo "dasv audit failed with exit code ${DASV_EXIT_CODE}." >&2
+        exit "$DASV_EXIT_CODE"
+

@@ -4,6 +4,11 @@ All notable changes to **`dasv`** (*Deterministic Adversarial Sandbox Verifier*)
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-11-23
+
+### Added
+- **Root `./action.yml` GitHub Marketplace entrypoint**: Exposes `uses: sashwat2212/dasv@v1` directly at the repository root with a concise Marketplace-compliant `description` (`<= 125` chars) while keeping `action/action.yml` byte-for-byte identical and CI-verified on both entrypoints.
+
 ## [1.0.0] - 2026-11-23
 
 ### Added
