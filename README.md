@@ -160,8 +160,8 @@ Outputs exposed to downstream workflow steps: `grade` (`A–F`), `hackability-sc
 | `0` | Audit passed (no findings at or above `--fail-on`) |
 | `1` | Audit failed (finding(s) met or exceeded `--fail-on` severity threshold) |
 | `2` | Configuration or CLI validation error |
-| `3` | Runtime or Docker/sandbox execution error |
-| `4` | Hard USD or token budget ceiling reached (`BudgetGuard` tripped; partial results saved) |
+| `3` | Hard USD or token budget ceiling reached (`BudgetGuard` tripped; partial results saved) |
+| `4` | Runtime or Docker/sandbox execution error |
 | `5` | Required native validator missing or failed (`--require-native`) |
 
 ---
